@@ -14,13 +14,22 @@ mod zoom;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
-    let config = Config::load("config.json");
+    let config = Config::load("Modloader/config/qol.json");
     let config = match config {
         Ok(c) => c,
         Err(e) => {
             log::error!("Failed to load config: {}", e);
             log::error!("Using default config");
-            Config::default()
+            let conf = Config::default();
+
+            // Save the default config
+            if let Err(e) = conf.save("Modloader/config/qol.json") {
+                log::error!("Failed to save default config: {}", e);
+            } else {
+                log::info!("Default config saved to Modloader/config/qol.json");
+            }
+
+            conf
         }
     };
 
@@ -47,8 +56,7 @@ unsafe extern "C" fn version(version: *const c_char) -> bool {
     if cfg!(feature = "1_151") {
         version == "Steam 1.151"
     } else if cfg!(feature = "1_163") {
-        // version == "Steam 1.163"
-        false
+        version == "Steam 1.163"
     } else if version == "Gog 1.163" {
         log::error!("Gog 1.163 detected");
         log::error!("Your game will crash. Ammo Extended only supports steam versions of the game.");

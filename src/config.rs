@@ -27,4 +27,13 @@ impl Config {
 
         Ok(serde_json::from_str(&config_str)?)
     }
+
+    pub fn save(&self, path: &str) -> Result<(), Box<dyn Error>> {
+        let config_str = serde_json::to_string_pretty(self)?;
+
+        std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap())?;
+        std::fs::write(path, config_str)?;
+
+        Ok(())
+    }
 }
