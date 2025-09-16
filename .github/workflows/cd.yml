@@ -22,13 +22,13 @@ jobs:
             - run: cargo test --verbose
             - run: cargo build --verbose --release --features 1_151
             - run: |
-                mv target\release\anti_wobble.dll 1_151\Modloader\mods\
+                mv target\release\highfleet-qol.dll 1_151\Modloader\mods\
             - run: cargo build --verbose --release --features 1_163
             - run: |
-                mv target\release\anti_wobble.dll 1_163\Modloader\mods\
+                mv target\release\highfleet-qol.dll 1_163\Modloader\mods\
             - uses: actions/upload-artifact@v4
               with:
-                name: anti_wobble
+                name: highfleet-qol
                 path: |
                     1_163
                     1_151
