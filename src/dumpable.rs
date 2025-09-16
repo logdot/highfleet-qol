@@ -25,7 +25,7 @@ pub unsafe fn dumpable() {
         &mut old_protect as *mut _,
     ).unwrap();
 
-    let p = Patch::patch_call(address, set_dumpable as *const (), 6);
+    let p = Patch::patch_call(address, set_dumpable as *const (), 6, true);
     std::mem::forget(p);
 
     VirtualProtect(

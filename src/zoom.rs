@@ -4,8 +4,8 @@ use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAG
 
 use crate::patchy::Patch;
 
-static mut MAX_ZOOM: u32 = 3;
 static mut MIN_ZOOM: u32 = 3;
+static mut MAX_ZOOM: u32 = 3;
 
 #[cfg(feature = "1_151")]
 static MIN_ZOOM_ADDR: usize = 0x143942538;
@@ -31,6 +31,7 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         address = 0x1402C31C9;
     }
 
+    // Default to 1.163
     let mut override_count = 14;
     if cfg!(feature = "1_151") {
         override_count = 20;
@@ -45,7 +46,7 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         &mut old_protect as *mut _,
     ).unwrap();
 
-    let p = Patch::patch_call(address, set_zoom_level as *const (), override_count);
+    let p = Patch::patch_call(address, set_zoom_level as *const (), override_count, false);
     std::mem::forget(p);
 
     VirtualProtect(

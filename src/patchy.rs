@@ -7,6 +7,68 @@ use mmap_rs::{MemoryAreas, Mmap, MmapOptions};
 const CALL_BYTES: [u8; 8] = [0xff, 0x15, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x08];
 const NEAR_JUMP: [u8; 1] = [0xe9];
 
+const SAVE_REGISTERS: [u8; 50] = [
+    // PUSH RAX
+    0x50,
+    // PUSH RCX
+    0x51,
+    // PUSH RDX
+    0x52,
+    // PUSH R8
+    0x41, 0x50,
+    // PUSH R9
+    0x41, 0x51,
+    // PUSH R10
+    0x41, 0x52,
+    // PUSH R11
+    0x41, 0x53,
+    // SUB RSP, 0x60
+    0x48, 0x83, 0xEC, 0x60,
+    // MOVDQU [RSP + 0x00], XMM0
+    0xF3, 0x0F, 0x7F, 0x04, 0x24,
+    // MOVDQU [RSP + 0x10], XMM1
+    0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x10,
+    // MOVDQU [RSP + 0x20], XMM2
+    0xF3, 0x0F, 0x7F, 0x54, 0x24, 0x20,
+    // MOVDQU [RSP + 0x30], XMM3
+    0xF3, 0x0F, 0x7F, 0x5C, 0x24, 0x30,
+    // MOVDQU [RSP + 0x40], XMM4
+    0xF3, 0x0F, 0x7F, 0x64, 0x24, 0x40,
+    // MOVDQU [RSP + 0x50], XMM5
+    0xF3, 0x0F, 0x7F, 0x6C, 0x24, 0x50
+];
+
+const LOAD_REGISTERS: [u8; 50] = [
+    // MOVDQU XMM0, [RSP + 0x00]
+    0xF3, 0x0F, 0x6F, 0x04, 0x24,
+    // MOVDQU XMM1, [RSP + 0x10]
+    0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x10,
+    // MOVDQU XMM2, [RSP + 0x20]
+    0xF3, 0x0F, 0x6F, 0x54, 0x24, 0x20,
+    // MOVDQU XMM3, [RSP + 0x30]
+    0xF3, 0x0F, 0x6F, 0x5C, 0x24, 0x30,
+    // MOVDQU XMM4, [RSP + 0x40]
+    0xF3, 0x0F, 0x6F, 0x64, 0x24, 0x40,
+    // MOVDQU XMM5, [RSP + 0x50]
+    0xF3, 0x0F, 0x6F, 0x6C, 0x24, 0x50,
+    // ADD RSP, 0x60
+    0x48, 0x83, 0xC4, 0x60,
+    // POP R11
+    0x41, 0x5B,
+    // POP R10
+    0x41, 0x5A,
+    // POP R9
+    0x41, 0x59,
+    // POP R8
+    0x41, 0x58,
+    // POP RDX
+    0x5A,
+    // POP RCX
+    0x59,
+    // POP RAX
+    0x58
+];
+
 /// A struct representing a single patch done to the game's code.
 /// A patch can be undone by calling `unpatch`.
 pub struct Patch {
@@ -21,7 +83,7 @@ impl Patch {
     ///
     /// # Safety
     /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original code.
-    pub unsafe fn patch_call(address: usize, function: *const (), size: usize) -> Self {
+    pub unsafe fn patch_call(address: usize, function: *const (), size: usize, save_overwritten: bool) -> Self {
         // Save the overwritten bytes
         let process_bytes = slice::from_raw_parts(address as *const u8, size);
         let overwritten = process_bytes.to_vec();
@@ -44,22 +106,23 @@ impl Patch {
 
         // Write nop slide
         let nops = vec![0x90; size - 5];
-        std::ptr::copy_nonoverlapping(nops.as_ptr(), address.add(5), size - 5);
+        write_data(address, &mut 5, &nops);
 
         // Keeps track of offset in memory
         let mut offset = 0;
 
-        // Write the overwritten bytes to the memory
-        std::ptr::copy_nonoverlapping(overwritten.as_ptr(), mem.add(offset), overwritten.len());
-        offset += overwritten.len();
+        if save_overwritten {
+            // Write overwritten bytes to memory
+            write_data(mem, &mut offset, &overwritten);
+        }
+
+        write_data(mem, &mut offset, &SAVE_REGISTERS);
 
         // Write the call to the memory
-        let function_ptr = &function as *const _ as *const u8;
+        write_call(mem, &mut offset, function);
 
-        std::ptr::copy_nonoverlapping(CALL_BYTES.as_ptr(), mem.add(offset), CALL_BYTES.len());
-        offset += CALL_BYTES.len();
-        std::ptr::copy_nonoverlapping(function_ptr, mem.add(offset), 8);
-        offset += 8;
+        // Write call to restore registers
+        write_data(mem, &mut offset, &LOAD_REGISTERS);
 
         // Jump back to the original code
         std::ptr::copy_nonoverlapping(NEAR_JUMP.as_ptr(), mem.add(offset), NEAR_JUMP.len());
@@ -76,6 +139,22 @@ impl Patch {
             mmap,
         }
     }
+}
+
+unsafe fn write_call(address: *mut u8, offset: &mut usize, function: *const ()) {
+    let function_ptr = &function as *const _ as *const u8;
+
+    std::ptr::copy_nonoverlapping(CALL_BYTES.as_ptr(), address.add(*offset), CALL_BYTES.len());
+    *offset += CALL_BYTES.len();
+
+    std::ptr::copy_nonoverlapping(function_ptr, address.add(*offset), 8);
+    // Pointers to functions in x64 are always 8 bytes
+    *offset += 8;
+}
+
+unsafe fn write_data(address: *mut u8, offset: &mut usize, data: &[u8]) {
+    std::ptr::copy_nonoverlapping(data.as_ptr(), address.add(*offset), data.len());
+    *offset += data.len();
 }
 
 /// Searches for a valid memory region that can be used for code within the 4GB address space for a jump.
@@ -106,7 +185,7 @@ mod tests {
         let address = address_space.as_ptr() as usize;
         let size = 10;
 
-        let patch = unsafe { Patch::patch_call(address, dummy as *const (), size) };
+        let patch = unsafe { Patch::patch_call(address, dummy as *const (), size, true) };
 
         // Check that bytes successfully written into mmap
         let mmap = patch.mmap.as_ptr();
