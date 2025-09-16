@@ -13,7 +13,7 @@ pub unsafe fn dumpable() {
         address = 0x1400256e0;
     }
 
-    let p = Patch::patch_call(address, set_dumpable as *const (), 6, true);
+    let p = Patch::patch_call(address, set_dumpable as *const (), 6, true, false);
     std::mem::forget(p);
 }
 

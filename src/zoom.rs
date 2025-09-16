@@ -33,7 +33,7 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         override_count = 20;
     }
 
-    let p = Patch::patch_call(address, set_zoom_level as *const (), override_count, false);
+    let p = Patch::patch_call(address, set_zoom_level as *const (), override_count, false, false);
     std::mem::forget(p);
 }
 
