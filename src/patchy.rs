@@ -1,8 +1,10 @@
 //! Simple patching library for windows processes.
 
 use core::slice;
+use std::ffi::c_void;
 
 use mmap_rs::{MemoryAreas, Mmap, MmapOptions};
+use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
 
 const CALL_BYTES: [u8; 8] = [0xff, 0x15, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x08];
 const NEAR_JUMP: [u8; 1] = [0xe9];
@@ -84,6 +86,16 @@ impl Patch {
     /// # Safety
     /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original code.
     pub unsafe fn patch_call(address: usize, function: *const (), size: usize, save_overwritten: bool) -> Self {
+        // Set EXECUTE READWRITE to allow writing to code section
+        let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+
+        VirtualProtect(
+            address as *mut c_void,
+            0x100,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect as *mut _,
+        ).unwrap();
+
         // Save the overwritten bytes
         let process_bytes = slice::from_raw_parts(address as *const u8, size);
         let overwritten = process_bytes.to_vec();
@@ -107,6 +119,14 @@ impl Patch {
         // Write nop slide
         let nops = vec![0x90; size - 5];
         write_data(address, &mut 5, &nops);
+
+        // Restore old protection on code section
+        VirtualProtect(
+            address as *mut c_void,
+            0x100,
+            old_protect,
+            &mut old_protect as *mut _,
+        ).unwrap();
 
         // Keeps track of offset in memory
         let mut offset = 0;

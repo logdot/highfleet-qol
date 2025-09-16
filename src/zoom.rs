@@ -1,7 +1,3 @@
-use std::ffi::c_void;
-
-use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
-
 use crate::patchy::Patch;
 
 static mut MIN_ZOOM: u32 = 3;
@@ -37,24 +33,8 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         override_count = 20;
     }
 
-    let mut old_protect = PAGE_PROTECTION_FLAGS(0);
-
-    VirtualProtect(
-        address as *mut c_void,
-        0x100,
-        PAGE_EXECUTE_READWRITE,
-        &mut old_protect as *mut _,
-    ).unwrap();
-
     let p = Patch::patch_call(address, set_zoom_level as *const (), override_count, false);
     std::mem::forget(p);
-
-    VirtualProtect(
-        address as *mut c_void,
-        0x100,
-        old_protect,
-        &mut old_protect as *mut _,
-    ).unwrap();
 }
 
 unsafe extern "C" fn set_zoom_level() {
