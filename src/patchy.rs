@@ -6,12 +6,21 @@ use std::ffi::c_void;
 use mmap_rs::{MemoryAreas, Mmap, MmapOptions};
 use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
 
+#[derive(PartialEq, Eq)]
+pub enum ReturnType {
+    None,
+    Rax,
+    Xmm0,
+}
+
 const CALL_BYTES: [u8; 8] = [0xff, 0x15, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x08];
 const NEAR_JUMP: [u8; 1] = [0xe9];
 
 // PUSH RAX
 const SAVE_RAX: [u8; 1] = [0x50];
-const SAVE_REGISTERS: [u8; 49] = [
+// MOVDQU [RSP + 0x00], XMM0
+const SAVE_XMM0: [u8; 5] = [0xF3, 0x0F, 0x7F, 0x04, 0x24];
+const SAVE_REGISTERS: [u8; 44] = [
     // PUSH RCX
     0x51,
     // PUSH RDX
@@ -26,8 +35,6 @@ const SAVE_REGISTERS: [u8; 49] = [
     0x41, 0x53,
     // SUB RSP, 0x60
     0x48, 0x83, 0xEC, 0x60,
-    // MOVDQU [RSP + 0x00], XMM0
-    0xF3, 0x0F, 0x7F, 0x04, 0x24,
     // MOVDQU [RSP + 0x10], XMM1
     0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x10,
     // MOVDQU [RSP + 0x20], XMM2
@@ -42,9 +49,9 @@ const SAVE_REGISTERS: [u8; 49] = [
 
 // POP RAX
 const LOAD_RAX: [u8; 1] = [0x58];
-const LOAD_REGISTERS: [u8; 49] = [
-    // MOVDQU XMM0, [RSP + 0x00]
-    0xF3, 0x0F, 0x6F, 0x04, 0x24,
+// MOVDQU XMM0, [RSP + 0x00]
+const LOAD_XMM0: [u8; 5] = [0xF3, 0x0F, 0x6F, 0x04, 0x24];
+const LOAD_REGISTERS: [u8; 44] = [
     // MOVDQU XMM1, [RSP + 0x10]
     0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x10,
     // MOVDQU XMM2, [RSP + 0x20]
@@ -85,7 +92,7 @@ impl Patch {
     ///
     /// # Safety
     /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original code.
-    pub unsafe fn patch_call(address: usize, function: *const (), size: usize, save_overwritten: bool, allow_return: bool) -> Self {
+    pub unsafe fn patch_call(address: usize, function: *const (), size: usize, save_overwritten: bool, allow_return: ReturnType) -> Self {
         // Set EXECUTE READWRITE to allow writing to code section
         let mut old_protect = PAGE_PROTECTION_FLAGS(0);
 
@@ -136,20 +143,28 @@ impl Patch {
             write_data(mem, &mut offset, &overwritten);
         }
 
-        // If we don't allow return, save RAX to leave it unchanged
-        if !allow_return {
+        // If we aren't returning in RAX, we need to save it to not mess up the original code
+        if allow_return != ReturnType::Rax {
             write_data(mem, &mut offset, &SAVE_RAX);
         }
         // Save clobbered registers to save their state
         write_data(mem, &mut offset, &SAVE_REGISTERS);
+        // if we aren't returning in XMM0, save it to not mess up the original code
+        if allow_return != ReturnType::Xmm0 {
+            write_data(mem, &mut offset, &SAVE_XMM0);
+        }
 
         // Write the call to the memory
         write_call(mem, &mut offset, function);
 
+        // If we aren't returning in XMM0, load it to it's original state
+        if allow_return != ReturnType::Xmm0 {
+            write_data(mem, &mut offset, &LOAD_XMM0);
+        }
         // Load clobbered registers to restore state
         write_data(mem, &mut offset, &LOAD_REGISTERS);
-        // If we don't allow return, restore RAX to leave it unchanged
-        if !allow_return {
+        // If we aren't returning in RAX, load it to it's original state
+        if allow_return != ReturnType::Rax {
             write_data(mem, &mut offset, &LOAD_RAX);
         }
 
@@ -214,7 +229,7 @@ mod tests {
         let address = address_space.as_ptr() as usize;
         let size = 10;
 
-        let patch = unsafe { Patch::patch_call(address, dummy as *const (), size, true, false) };
+        let patch = unsafe { Patch::patch_call(address, dummy as *const (), size, true, ReturnType::None) };
 
         // Check that bytes successfully written into mmap
         let mmap = patch.mmap.as_ptr();

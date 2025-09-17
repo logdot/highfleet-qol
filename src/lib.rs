@@ -43,6 +43,16 @@ unsafe extern "C" fn init() -> bool {
     if config.enable_arcade_zoom {
         zoom::patch_zoom(config.min_zoom_level as u32, config.max_zoom_level as u32);
         log::info!("Arcade zoom enabled (min zoom level {}, max zoom level {})", config.min_zoom_level, config.max_zoom_level);
+
+        if config.zoom_levels.len() < 5 {
+            log::warn!("The game by default specifies 5 zoom levels. If you specify less, the game may be unstable.");
+        }
+
+        if config.zoom_levels.len() < config.max_zoom_level as usize {
+            log::warn!("You have specified more max zoom levels than you have zoom levels. This may cause instability.");
+        }
+
+        zoom::patch_levels(config.zoom_levels);
     } else {
         log::info!("Arcade zoom disabled");
     }

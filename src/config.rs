@@ -8,6 +8,7 @@ pub struct Config {
     pub enable_arcade_zoom: bool,
     pub max_zoom_level: u8,
     pub min_zoom_level: u8,
+    pub zoom_levels: Vec<f32>,
 }
 
 impl Default for Config {
@@ -17,6 +18,7 @@ impl Default for Config {
             enable_arcade_zoom: true,
             max_zoom_level: 5,
             min_zoom_level: 3,
+            zoom_levels: vec![14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
         }
     }
 }

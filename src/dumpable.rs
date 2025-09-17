@@ -1,6 +1,6 @@
 use std::arch::asm;
 
-use crate::patchy::Patch;
+use crate::patchy::{Patch, ReturnType};
 
 pub unsafe fn dumpable() {
     let address;
@@ -13,7 +13,7 @@ pub unsafe fn dumpable() {
         address = 0x1400256e0;
     }
 
-    let p = Patch::patch_call(address, set_dumpable as *const (), 6, true, false);
+    let p = Patch::patch_call(address, set_dumpable as *const (), 6, true, ReturnType::None);
     std::mem::forget(p);
 }
 
