@@ -8,6 +8,8 @@ static mut ZOOM_LEVELS: Vec<f32> = Vec::new();
 static MIN_ZOOM_ADDR: usize = 0x143942538;
 #[cfg(feature = "1_151")]
 static MAX_ZOOM_ADDR: usize = 0x140391160;
+#[cfg(feature = "1_151")]
+static ZOOM_LEVEL_ADDR: usize = 0x14039115c;
 
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 static MIN_ZOOM_ADDR: usize = 0x143a119a4;
@@ -45,7 +47,7 @@ pub unsafe fn patch_levels(zoom_levels: Vec<f32>) {
 
     let address;
     if cfg!(feature = "1_151") {
-        address = 0x0;
+        address = 0x140249371;
     } else if cfg!(feature = "1_163") {
         address = 0x14026b03f;
     } else {
@@ -68,8 +70,26 @@ unsafe extern "C" fn set_zoom_level() {
     *min_level = min;
 }
 
+#[cfg(feature = "1_151")]
+static IS_IN_ARCADE: usize = 0x147eed995;
+#[cfg(feature = "1_151")]
+static REAL_CALC_ZOOM: usize = 0x14022da90;
+
+#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
+static IS_IN_ARCADE: usize = 0x147fc6fb7;
+#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
+static REAL_CALC_ZOOM: usize = 0x14024f170;
+
 #[allow(static_mut_refs)]
 unsafe extern "C" fn calc_zoom_value() -> f32 {
+    let is_in_arcade = IS_IN_ARCADE as *const bool;
+
+    if !*is_in_arcade {
+        // Call original function if both booleans are false
+        let func: extern "C" fn() -> f32 = std::mem::transmute(REAL_CALC_ZOOM as *const ());
+        return func();
+    }
+
     let zoom_value = ZOOM_LEVEL_ADDR as *const u32;
 
     if *zoom_value > ZOOM_LEVELS.len() as u32 {
