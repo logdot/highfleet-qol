@@ -11,6 +11,7 @@ mod dumpable;
 // mod logger;
 mod config;
 mod zoom;
+mod guns;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
@@ -55,6 +56,13 @@ unsafe extern "C" fn init() -> bool {
         zoom::patch_levels(config.zoom_levels);
     } else {
         log::info!("Arcade zoom disabled");
+    }
+
+    if config.enable_unblocked_guns {
+        guns::patch_sector_blocking();
+        log::info!("Unblocked guns enabled");
+    } else {
+        log::info!("Unblocked guns disabled");
     }
 
     true

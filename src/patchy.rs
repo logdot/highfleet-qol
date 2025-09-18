@@ -83,7 +83,7 @@ const LOAD_REGISTERS: [u8; 44] = [
 pub struct Patch {
     size: usize,
     overwritten: Vec<u8>,
-    mmap: Mmap,
+    mmap: Option<Mmap>,
 }
 
 impl Patch {
@@ -180,7 +180,41 @@ impl Patch {
         Patch {
             size,
             overwritten,
-            mmap,
+            mmap: Some(mmap),
+        }
+    }
+
+    pub unsafe fn overwrite(address: usize, data: &[u8]) -> Self {
+        // Set EXECUTE READWRITE to allow writing to code section
+        let mut old_protect = PAGE_PROTECTION_FLAGS(0);
+
+        VirtualProtect(
+            address as *mut c_void,
+            0x100,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect as *mut _,
+        ).unwrap();
+
+        // Save the overwritten bytes
+        let process_bytes = slice::from_raw_parts(address as *const u8, data.len());
+        let overwritten = process_bytes.to_vec();
+
+        let address = address as *mut u8;
+
+        std::ptr::copy_nonoverlapping(data.as_ptr(), address, data.len());
+
+        // Restore old protection on code section
+        VirtualProtect(
+            address as *mut c_void,
+            0x100,
+            old_protect,
+            &mut old_protect as *mut _,
+        ).unwrap();
+
+        Patch {
+            size: data.len(),
+            overwritten,
+            mmap: None,
         }
     }
 }
@@ -232,7 +266,7 @@ mod tests {
         let patch = unsafe { Patch::patch_call(address, dummy as *const (), size, true, ReturnType::None) };
 
         // Check that bytes successfully written into mmap
-        let mmap = patch.mmap.as_ptr();
+        let mmap = patch.mmap.unwrap().as_ptr();
         let overwritten = unsafe { slice::from_raw_parts(mmap, size) };
         assert_eq!(*overwritten, DEAD_BEEF.to_vec().repeat(10)[..size])
     }
