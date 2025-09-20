@@ -6,12 +6,13 @@ use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
 
+// mod logger;
 mod patchy;
 mod dumpable;
-// mod logger;
 mod config;
 mod zoom;
 mod guns;
+mod shake;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
@@ -63,6 +64,13 @@ unsafe extern "C" fn init() -> bool {
         log::info!("Unblocked guns enabled");
     } else {
         log::info!("Unblocked guns disabled");
+    }
+
+    if config.enable_reduced_shake {
+        shake::patch_shake();
+        log::info!("Reduced shake enabled");
+    } else {
+        log::info!("Reduced shake disabled");
     }
 
     true

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub enable_anti_wobble: bool,
     pub enable_unblocked_guns: bool,
+    pub enable_reduced_shake: bool,
     pub enable_arcade_zoom: bool,
     pub max_zoom_level: u8,
     pub min_zoom_level: u8,
@@ -17,6 +18,7 @@ impl Default for Config {
         Self {
             enable_anti_wobble: false,
             enable_unblocked_guns: false,
+            enable_reduced_shake: false,
             enable_arcade_zoom: true,
             max_zoom_level: 5,
             min_zoom_level: 3,
