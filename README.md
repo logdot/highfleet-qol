@@ -2,6 +2,15 @@
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
+To install, download the mod from [releases](https://github.com/logdot/highfleet-qol/releases/latest).
+The zip has two folders, one each for the 1.151 and 1.163 versions of the game.
+Open the respective folder for your version.
+There should be a `Modloader` folder inside.
+Move the `Modloader` folder (not it's contents) into the root of your highfleet installation.
+
+Your Highfleet folder should look like this:
+
+<img width="609" height="457" alt="Screenshot 2025-10-14 at 7 10 37 PM" src="https://github.com/user-attachments/assets/7dea0627-7021-4f3b-b369-ada27aea8c98" />
 
 When the mod first runs, it generates a default config file in `Modloader/config/qol.json`.
 This is what the file looks like by default:
@@ -13,6 +22,7 @@ This is what the file looks like by default:
   "enable_reduced_shake": false,
   "enable_arcade_zoom": true,
   "max_zoom_level": 5,
+
   "min_zoom_level": 3,
   "zoom_levels": [
     14.0,
