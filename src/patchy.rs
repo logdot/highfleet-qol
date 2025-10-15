@@ -249,6 +249,7 @@ fn search_memory_cave(address: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::System::Memory::{VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE_READWRITE};
 
     const DEAD_BEEF: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 
@@ -258,16 +259,41 @@ mod tests {
 
     #[test]
     fn test_patch_call() {
-        let address_space = DEAD_BEEF.to_vec().repeat(10);
+        unsafe {
+            // Allocate executable memory for testing
+            let size = 40; // Need more space for the patch
+            let test_memory = VirtualAlloc(
+                None,
+                size,
+                MEM_COMMIT,
+                PAGE_EXECUTE_READWRITE,
+            );
 
-        let address = address_space.as_ptr() as usize;
-        let size = 10;
+            if test_memory.is_null() {
+                panic!("Failed to allocate test memory");
+            }
 
-        let patch = unsafe { Patch::patch_call(address, dummy as *const (), size, true, ReturnType::None) };
+            // Write test pattern to memory
+            let test_data = DEAD_BEEF.to_vec().repeat(10);
+            std::ptr::copy_nonoverlapping(
+                test_data.as_ptr(),
+                test_memory as *mut u8,
+                test_data.len().min(size)
+            );
 
-        // Check that bytes successfully written into mmap
-        let mmap = patch.mmap.unwrap().as_ptr();
-        let overwritten = unsafe { slice::from_raw_parts(mmap, size) };
-        assert_eq!(*overwritten, DEAD_BEEF.to_vec().repeat(10)[..size])
+            let address = test_memory as usize;
+            let patch_size = 10;
+
+            let patch = Patch::patch_call(address, dummy as *const (), patch_size, true, ReturnType::None);
+
+            // Check that bytes were successfully written into mmap
+            if let Some(ref mmap) = patch.mmap {
+                let overwritten = slice::from_raw_parts(mmap.as_ptr(), patch_size);
+                assert_eq!(&overwritten[..DEAD_BEEF.len()], &DEAD_BEEF[..]);
+            }
+
+            // Cleanup
+            VirtualFree(test_memory, 0, MEM_RELEASE);
+        }
     }
 }
