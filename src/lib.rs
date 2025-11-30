@@ -6,14 +6,15 @@ use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
 
+mod config;
+mod dumpable;
+mod guns;
 mod logger;
 mod patchy;
-mod dumpable;
-mod config;
-mod zoom;
-mod guns;
-mod shake;
 mod plane;
+mod shake;
+mod structs;
+mod zoom;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
@@ -45,7 +46,11 @@ unsafe extern "C" fn init() -> bool {
 
     if config.enable_arcade_zoom {
         zoom::patch_zoom(config.min_zoom_level as u32, config.max_zoom_level as u32);
-        log::info!("Arcade zoom enabled (min zoom level {}, max zoom level {})", config.min_zoom_level, config.max_zoom_level);
+        log::info!(
+            "Arcade zoom enabled (min zoom level {}, max zoom level {})",
+            config.min_zoom_level,
+            config.max_zoom_level
+        );
 
         if config.zoom_levels.len() < 5 {
             log::warn!("The game by default specifies 5 zoom levels. If you specify less, the game may be unstable.");
@@ -88,7 +93,9 @@ unsafe extern "C" fn version(version: *const c_char) -> bool {
         version == "Steam 1.163"
     } else if version == "Gog 1.163" {
         log::error!("Gog 1.163 detected");
-        log::error!("Your game will crash. Ammo Extended only supports steam versions of the game.");
+        log::error!(
+            "Your game will crash. Ammo Extended only supports steam versions of the game."
+        );
         false
     } else {
         false
