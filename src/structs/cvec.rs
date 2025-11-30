@@ -24,19 +24,16 @@ impl<T: Serialize> Serialize for CVec<T> {
 impl<T> From<&CVec<T>> for Vec<&T> {
     fn from(cvec: &CVec<T>) -> Self {
         if cvec.items.is_null() || cvec.items_end.is_null() {
-            log::warn!("CVec has null pointers, returning empty Vec");
             return Vec::new();
         }
 
         let count = unsafe { cvec.items_end.offset_from(cvec.items) };
-        log::info!("CVec has {} items", count);
         if count < 0 {
             log::error!("CVec has negative item count, returning empty Vec");
             return Vec::new();
         }
 
         if count == 0 {
-            log::info!("CVec has zero items, returning empty Vec");
             return Vec::new();
         }
 
@@ -52,10 +49,6 @@ impl<T> From<&CVec<T>> for Vec<&T> {
 
             while current < cvec.items_end {
                 if current.is_null() {
-                    log::warn!(
-                        "Encountered null pointer in CVec at index {}, stopping read",
-                        items_read
-                    );
                     break;
                 }
 
@@ -65,7 +58,14 @@ impl<T> From<&CVec<T>> for Vec<&T> {
             }
         }
 
-        log::info!("Converted CVec to Vec with {} items", result.len());
+        if result.len() < count as usize {
+            log::warn!(
+                "CVec expected to have {} items, but only read {} items",
+                count,
+                result.len()
+            );
+        }
+
         result
     }
 }
