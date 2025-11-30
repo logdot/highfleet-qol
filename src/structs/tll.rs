@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 /// Simple type that stores the size of the TLL and a pointer to the sentinel node.
@@ -39,7 +41,7 @@ impl<T, U> From<&Tll<T, U>> for Vec<&U> {
         unsafe {
             if tll.is_sentinel {
                 if tll.parent.is_null() || (*tll.parent).is_sentinel {
-                    return result;
+                    return Vec::new();
                 }
 
                 in_order_traverse(tll.parent, &mut result);
@@ -48,16 +50,51 @@ impl<T, U> From<&Tll<T, U>> for Vec<&U> {
             }
         }
 
+        result.into_iter().map(|(_, data)| data).collect()
+    }
+}
+
+impl<T: Eq + Hash, U> From<&Tll<T, U>> for std::collections::HashMap<&T, &U> {
+    fn from(tll: &Tll<T, U>) -> Self {
+        let mut result = std::collections::HashMap::new();
+
+        unsafe {
+            if tll.is_sentinel {
+                if tll.parent.is_null() || (*tll.parent).is_sentinel {
+                    return result;
+                }
+
+                let mut items = Vec::new();
+                in_order_traverse(tll.parent, &mut items);
+
+                for item in items {
+                    let key = item.0;
+                    let data = item.1;
+                    result.insert(key, data);
+                }
+            } else {
+                let mut items = Vec::new();
+                in_order_traverse(tll as *const Tll<T, U>, &mut items);
+
+                for item in items {
+                    let key = item.0;
+                    let data = item.1;
+                    result.insert(key, data);
+                }
+            }
+        }
+
         result
     }
 }
 
-unsafe fn in_order_traverse<T, U>(node: *const Tll<T, U>, result: &mut Vec<&U>) {
+unsafe fn in_order_traverse<T, U>(node: *const Tll<T, U>, result: &mut Vec<(&T, &U)>) {
     if node.is_null() || (*node).is_sentinel {
         return;
     }
 
     in_order_traverse((*node).left, result);
-    result.push(&(*node).data);
+    let node_ref = &*node;
+    result.push((&node_ref.key, &node_ref.data));
     in_order_traverse((*node).right, result);
 }
