@@ -4,7 +4,9 @@ use core::slice;
 use std::ffi::c_void;
 
 use mmap_rs::{MemoryAreas, Mmap, MmapOptions};
-use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
+use windows::Win32::System::Memory::{
+    VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
+};
 
 #[derive(PartialEq, Eq)]
 pub enum ReturnType {
@@ -22,29 +24,18 @@ const SAVE_RAX: [u8; 1] = [0x50];
 const SAVE_XMM0: [u8; 5] = [0xF3, 0x0F, 0x7F, 0x04, 0x24];
 const SAVE_REGISTERS: [u8; 44] = [
     // PUSH RCX
-    0x51,
-    // PUSH RDX
-    0x52,
-    // PUSH R8
-    0x41, 0x50,
-    // PUSH R9
-    0x41, 0x51,
-    // PUSH R10
-    0x41, 0x52,
-    // PUSH R11
-    0x41, 0x53,
-    // SUB RSP, 0x60
-    0x48, 0x83, 0xEC, 0x60,
-    // MOVDQU [RSP + 0x10], XMM1
-    0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x10,
-    // MOVDQU [RSP + 0x20], XMM2
-    0xF3, 0x0F, 0x7F, 0x54, 0x24, 0x20,
-    // MOVDQU [RSP + 0x30], XMM3
-    0xF3, 0x0F, 0x7F, 0x5C, 0x24, 0x30,
-    // MOVDQU [RSP + 0x40], XMM4
-    0xF3, 0x0F, 0x7F, 0x64, 0x24, 0x40,
-    // MOVDQU [RSP + 0x50], XMM5
-    0xF3, 0x0F, 0x7F, 0x6C, 0x24, 0x50
+    0x51, // PUSH RDX
+    0x52, // PUSH R8
+    0x41, 0x50, // PUSH R9
+    0x41, 0x51, // PUSH R10
+    0x41, 0x52, // PUSH R11
+    0x41, 0x53, // SUB RSP, 0x60
+    0x48, 0x83, 0xEC, 0x60, // MOVDQU [RSP + 0x10], XMM1
+    0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x10, // MOVDQU [RSP + 0x20], XMM2
+    0xF3, 0x0F, 0x7F, 0x54, 0x24, 0x20, // MOVDQU [RSP + 0x30], XMM3
+    0xF3, 0x0F, 0x7F, 0x5C, 0x24, 0x30, // MOVDQU [RSP + 0x40], XMM4
+    0xF3, 0x0F, 0x7F, 0x64, 0x24, 0x40, // MOVDQU [RSP + 0x50], XMM5
+    0xF3, 0x0F, 0x7F, 0x6C, 0x24, 0x50,
 ];
 
 // POP RAX
@@ -53,33 +44,23 @@ const LOAD_RAX: [u8; 1] = [0x58];
 const LOAD_XMM0: [u8; 5] = [0xF3, 0x0F, 0x6F, 0x04, 0x24];
 const LOAD_REGISTERS: [u8; 44] = [
     // MOVDQU XMM1, [RSP + 0x10]
-    0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x10,
-    // MOVDQU XMM2, [RSP + 0x20]
-    0xF3, 0x0F, 0x6F, 0x54, 0x24, 0x20,
-    // MOVDQU XMM3, [RSP + 0x30]
-    0xF3, 0x0F, 0x6F, 0x5C, 0x24, 0x30,
-    // MOVDQU XMM4, [RSP + 0x40]
-    0xF3, 0x0F, 0x6F, 0x64, 0x24, 0x40,
-    // MOVDQU XMM5, [RSP + 0x50]
-    0xF3, 0x0F, 0x6F, 0x6C, 0x24, 0x50,
-    // ADD RSP, 0x60
-    0x48, 0x83, 0xC4, 0x60,
-    // POP R11
-    0x41, 0x5B,
-    // POP R10
-    0x41, 0x5A,
-    // POP R9
-    0x41, 0x59,
-    // POP R8
-    0x41, 0x58,
-    // POP RDX
-    0x5A,
-    // POP RCX
-    0x59
+    0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x10, // MOVDQU XMM2, [RSP + 0x20]
+    0xF3, 0x0F, 0x6F, 0x54, 0x24, 0x20, // MOVDQU XMM3, [RSP + 0x30]
+    0xF3, 0x0F, 0x6F, 0x5C, 0x24, 0x30, // MOVDQU XMM4, [RSP + 0x40]
+    0xF3, 0x0F, 0x6F, 0x64, 0x24, 0x40, // MOVDQU XMM5, [RSP + 0x50]
+    0xF3, 0x0F, 0x6F, 0x6C, 0x24, 0x50, // ADD RSP, 0x60
+    0x48, 0x83, 0xC4, 0x60, // POP R11
+    0x41, 0x5B, // POP R10
+    0x41, 0x5A, // POP R9
+    0x41, 0x59, // POP R8
+    0x41, 0x58, // POP RDX
+    0x5A, // POP RCX
+    0x59,
 ];
 
 /// A struct representing a single patch done to the game's code.
 /// A patch can be undone by calling `unpatch`.
+#[allow(dead_code)]
 pub struct Patch {
     size: usize,
     overwritten: Vec<u8>,
@@ -92,7 +73,13 @@ impl Patch {
     ///
     /// # Safety
     /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original code.
-    pub unsafe fn patch_call(address: usize, function: *const (), size: usize, save_overwritten: bool, allow_return: ReturnType) -> Self {
+    pub unsafe fn patch_call(
+        address: usize,
+        function: *const (),
+        size: usize,
+        save_overwritten: bool,
+        allow_return: ReturnType,
+    ) -> Self {
         // Set EXECUTE READWRITE to allow writing to code section
         let mut old_protect = PAGE_PROTECTION_FLAGS(0);
 
@@ -101,7 +88,8 @@ impl Patch {
             0x100,
             PAGE_EXECUTE_READWRITE,
             &mut old_protect as *mut _,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Save the overwritten bytes
         let process_bytes = slice::from_raw_parts(address as *const u8, size);
@@ -109,9 +97,11 @@ impl Patch {
 
         let memory_cave = search_memory_cave(address).expect("No memory cave found");
 
-        let mut mmap = MmapOptions::new(MmapOptions::page_size()).unwrap()
+        let mut mmap = MmapOptions::new(MmapOptions::page_size())
+            .unwrap()
             .with_address(memory_cave)
-            .map_mut().expect("Unable to allocate memory map");
+            .map_mut()
+            .expect("Unable to allocate memory map");
 
         let address = address as *mut u8;
 
@@ -120,7 +110,9 @@ impl Patch {
         // Write relative jump
         std::ptr::copy_nonoverlapping(NEAR_JUMP.as_ptr(), address, NEAR_JUMP.len());
         let jump_offset = mem as isize - address as isize - 5;
-        let jump_offset: i32 = jump_offset.try_into().expect("Jump offset greater than 32 bits");
+        let jump_offset: i32 = jump_offset
+            .try_into()
+            .expect("Jump offset greater than 32 bits");
         std::ptr::copy_nonoverlapping(&jump_offset as *const _ as *const u8, address.add(1), 4);
 
         // Write nop slide
@@ -133,7 +125,8 @@ impl Patch {
             0x100,
             old_protect,
             &mut old_protect as *mut _,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Keeps track of offset in memory
         let mut offset = 0;
@@ -171,7 +164,9 @@ impl Patch {
         // Jump back to the original code
         std::ptr::copy_nonoverlapping(NEAR_JUMP.as_ptr(), mem.add(offset), NEAR_JUMP.len());
         let jump_offset = address.add(size) as isize - mem.add(offset) as isize - 5;
-        let jump_offset: i32 = jump_offset.try_into().expect("Jump offset greater than 32 bits");
+        let jump_offset: i32 = jump_offset
+            .try_into()
+            .expect("Jump offset greater than 32 bits");
         offset += NEAR_JUMP.len();
         std::ptr::copy_nonoverlapping(&jump_offset as *const _ as *const u8, mem.add(offset), 4);
 
@@ -193,7 +188,8 @@ impl Patch {
             0x100,
             PAGE_EXECUTE_READWRITE,
             &mut old_protect as *mut _,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Save the overwritten bytes
         let process_bytes = slice::from_raw_parts(address as *const u8, data.len());
@@ -209,7 +205,8 @@ impl Patch {
             0x100,
             old_protect,
             &mut old_protect as *mut _,
-        ).unwrap();
+        )
+        .unwrap();
 
         Patch {
             size: data.len(),
@@ -238,18 +235,20 @@ unsafe fn write_data(address: *mut u8, offset: &mut usize, data: &[u8]) {
 /// Searches for a valid memory region that can be used for code within the 4GB address space for a jump.
 fn search_memory_cave(address: usize) -> Option<usize> {
     // 0x80000000 is equivalent to 2GB
-    let lower_bound = address-0x80000000 + MmapOptions::allocation_granularity();
-    let upper_bound = address+0x80000000 - MmapOptions::allocation_granularity();
+    let lower_bound = address - 0x80000000 + MmapOptions::allocation_granularity();
+    let upper_bound = address + 0x80000000 - MmapOptions::allocation_granularity();
 
-    (lower_bound..upper_bound).step_by(MmapOptions::allocation_granularity()).find(|address| {
-        MemoryAreas::query(*address).unwrap().is_none()
-    })
+    (lower_bound..upper_bound)
+        .step_by(MmapOptions::allocation_granularity())
+        .find(|address| MemoryAreas::query(*address).unwrap().is_none())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Memory::{VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE_READWRITE};
+    use windows::Win32::System::Memory::{
+        VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, PAGE_EXECUTE_READWRITE,
+    };
 
     const DEAD_BEEF: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 
@@ -262,12 +261,7 @@ mod tests {
         unsafe {
             // Allocate executable memory for testing
             let size = 40; // Need more space for the patch
-            let test_memory = VirtualAlloc(
-                None,
-                size,
-                MEM_COMMIT,
-                PAGE_EXECUTE_READWRITE,
-            );
+            let test_memory = VirtualAlloc(None, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
             if test_memory.is_null() {
                 panic!("Failed to allocate test memory");
@@ -278,13 +272,19 @@ mod tests {
             std::ptr::copy_nonoverlapping(
                 test_data.as_ptr(),
                 test_memory as *mut u8,
-                test_data.len().min(size)
+                test_data.len().min(size),
             );
 
             let address = test_memory as usize;
             let patch_size = 10;
 
-            let patch = Patch::patch_call(address, dummy as *const (), patch_size, true, ReturnType::None);
+            let patch = Patch::patch_call(
+                address,
+                dummy as *const (),
+                patch_size,
+                true,
+                ReturnType::None,
+            );
 
             // Check that bytes were successfully written into mmap
             if let Some(ref mmap) = patch.mmap {
@@ -293,7 +293,7 @@ mod tests {
             }
 
             // Cleanup
-            VirtualFree(test_memory, 0, MEM_RELEASE);
+            VirtualFree(test_memory, 0, MEM_RELEASE).unwrap();
         }
     }
 }
