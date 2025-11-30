@@ -6,13 +6,14 @@ use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
 
-// mod logger;
+mod logger;
 mod patchy;
 mod dumpable;
 mod config;
 mod zoom;
 mod guns;
 mod shake;
+mod plane;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
@@ -72,6 +73,8 @@ unsafe extern "C" fn init() -> bool {
     } else {
         log::info!("Reduced shake disabled");
     }
+
+    plane::patch_planes();
 
     true
 }
