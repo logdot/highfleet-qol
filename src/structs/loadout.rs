@@ -12,7 +12,8 @@ pub struct ItemMunition {
     pub name: EscadraString,
     /// How many of this item a plane can carry.
     pub count: u32,
-    _padding: [u8; 4],
+    #[serde(skip)]
+    pub _padding: [u8; 4],
 }
 
 #[repr(C)]
@@ -25,7 +26,8 @@ pub struct Loadout {
     pub items: CVec<ItemMunition>,
     pub launch_loadout_weight: u32,
     pub has_gun37mm: bool,
-    _padding: [u8; 3],
+    #[serde(skip)]
+    pub _padding: [u8; 3],
 }
 
 impl From<ItemMunition> for String {
