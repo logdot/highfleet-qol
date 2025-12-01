@@ -5,7 +5,7 @@ use crate::structs::{cvec::CVec, loadout::Loadout};
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Plane {
-    _padding: [u8; 8],
+    pub _padding: [u8; 8],
     pub loadouts: CVec<*const Loadout>,
 }
 
