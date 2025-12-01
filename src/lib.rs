@@ -9,6 +9,7 @@ use crate::config::Config;
 mod config;
 mod dumpable;
 mod guns;
+#[cfg(debug_assertions)]
 mod logger;
 mod patchy;
 mod plane;
