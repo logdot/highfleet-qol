@@ -93,9 +93,7 @@ unsafe extern "C" fn version(version: *const c_char) -> bool {
         version == "Steam 1.163"
     } else if version == "Gog 1.163" {
         log::error!("Gog 1.163 detected");
-        log::error!(
-            "Your game will crash. Ammo Extended only supports steam versions of the game."
-        );
+        log::error!("Your game will crash. QOL only supports steam versions of the game.");
         false
     } else {
         false
