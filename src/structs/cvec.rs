@@ -11,6 +11,36 @@ pub struct CVec<T> {
     pub items_rsv_end: *const T,
 }
 
+impl<T> CVec<T> {
+    pub fn empty() -> Self {
+        Self {
+            items: std::ptr::null(),
+            items_end: std::ptr::null(),
+            items_rsv_end: std::ptr::null(),
+        }
+    }
+
+    /// Returns the number of items in the CVec.
+    pub fn len(&self) -> usize {
+        if self.items.is_null() || self.items_end.is_null() {
+            return 0;
+        }
+
+        let count = unsafe { self.items_end.offset_from(self.items) };
+        if count < 0 {
+            log::error!("CVec has negative item count, returning length 0");
+            return 0;
+        }
+
+        count as usize
+    }
+
+    /// Returns true if the CVec is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 impl<T: Serialize> Serialize for CVec<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -45,7 +75,6 @@ impl<T> From<&CVec<T>> for Vec<&T> {
 
         unsafe {
             let mut current = cvec.items;
-            let mut items_read = 0;
 
             while current < cvec.items_end {
                 if current.is_null() {
@@ -54,7 +83,6 @@ impl<T> From<&CVec<T>> for Vec<&T> {
 
                 result.push(&(*current));
                 current = current.add(1);
-                items_read += 1;
             }
         }
 
