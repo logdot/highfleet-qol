@@ -6,7 +6,7 @@ use crate::structs::{cvec::CVec, loadout::Loadout};
 #[derive(Debug, Clone)]
 pub struct Plane {
     _padding: [u8; 8],
-    loadouts: CVec<*const Loadout>,
+    pub loadouts: CVec<*const Loadout>,
 }
 
 impl Serialize for Plane {
