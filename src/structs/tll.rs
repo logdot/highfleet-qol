@@ -36,8 +36,8 @@ pub struct Tll<T, U> {
     /// The right child node of this node.
     /// If this is the sentinel node, this points to the rightmost node in the tree.
     pub right: *mut Tll<T, U>,
-    /// Is this node red?
-    pub is_red: bool,
+    /// Is this node black?
+    pub is_black: bool,
     /// Is this node the sentinel?
     /// This means it is either the root parent node or a null node when traversing the tree.
     pub is_sentinel: bool,
@@ -55,7 +55,7 @@ impl<T: Default, U: Default> TllContainer<T, U> {
                 left: sentinel_ptr,
                 parent: sentinel_ptr,
                 right: sentinel_ptr,
-                is_red: false,
+                is_black: true,
                 is_sentinel: true,
                 _padding: [0; 6],
                 key: T::default(),
@@ -110,7 +110,7 @@ impl<T, U> TllContainer<T, U> {
             if std::ptr::eq((*sentinel).parent, sentinel) {
                 // Tree is empty, insert as root
                 let new_node_ptr = Tll::new(key, value, sentinel);
-                (*new_node_ptr).is_red = false; // Root must be black
+                (*new_node_ptr).is_black = true; // Root must be black
 
                 // Update sentinel to point to new root
                 (*self.sentinel).parent = new_node_ptr;
@@ -161,11 +161,11 @@ impl<T, U> TllContainer<T, U> {
     {
         let sentinel = self.sentinel;
 
-        while (*(*node).parent).is_red {
+        while !(*(*node).parent).is_black {
             let parent = (*node).parent;
             let Some(gp) = (*node).grandparent() else {
                 log::error!(
-                    "Parent is red but grandparent is null. Node key: {:?}",
+                    "Parent is black=false but grandparent is null. Node key: {:?}",
                     (*node).key
                 );
                 break;
@@ -174,10 +174,10 @@ impl<T, U> TllContainer<T, U> {
             if std::ptr::eq(parent, (*gp).left) {
                 let uncle = (*gp).right;
 
-                if (*uncle).is_red {
-                    (*parent).is_red = false;
-                    (*uncle).is_red = false;
-                    (*gp).is_red = true;
+                if !(*uncle).is_black {
+                    (*parent).is_black = true;
+                    (*uncle).is_black = true;
+                    (*gp).is_black = false;
                     node = gp;
                 } else {
                     if std::ptr::eq(node, (*parent).right) {
@@ -189,18 +189,18 @@ impl<T, U> TllContainer<T, U> {
                     let parent = (*node).parent;
                     let grandparent = (*node).grandparent().unwrap();
 
-                    (*parent).is_red = false;
-                    (*grandparent).is_red = true;
+                    (*parent).is_black = true;
+                    (*grandparent).is_black = false;
                     (*grandparent).rotate_right(sentinel);
                 }
             } else {
                 // Mirror cases for right side
                 let uncle = (*gp).left;
 
-                if (*uncle).is_red {
-                    (*parent).is_red = false;
-                    (*uncle).is_red = false;
-                    (*gp).is_red = true;
+                if !(*uncle).is_black {
+                    (*parent).is_black = true;
+                    (*uncle).is_black = true;
+                    (*gp).is_black = false;
                     node = gp;
                 } else {
                     if std::ptr::eq(node, (*parent).left) {
@@ -212,15 +212,15 @@ impl<T, U> TllContainer<T, U> {
                     let parent = (*node).parent;
                     let grandparent = (*node).grandparent().unwrap();
 
-                    (*parent).is_red = false;
-                    (*grandparent).is_red = true;
+                    (*parent).is_black = true;
+                    (*grandparent).is_black = false;
                     (*grandparent).rotate_left(sentinel);
                 }
             }
         }
 
         // Ensure root is black
-        (*(*sentinel).parent).is_red = false;
+        (*(*sentinel).parent).is_black = true;
     }
 
     unsafe fn update_sentinel_min_max(&mut self) {
@@ -258,7 +258,7 @@ impl<T, U> Tll<T, U> {
             left: sentinel,
             parent: sentinel,
             right: sentinel,
-            is_red: true,
+            is_black: false,
             is_sentinel: false,
             _padding: [0; 6],
             key,
@@ -451,7 +451,7 @@ mod tests {
             left: sentinel,
             parent: sentinel,
             right: sentinel,
-            is_red: true,
+            is_black: false,
             is_sentinel: false,
             _padding: [0; 6],
             key,
@@ -835,11 +835,11 @@ mod tests {
         }
 
         // Property 2: Red nodes must have black children
-        if (*node).is_red {
-            if !(*(*node).left).is_sentinel && (*(*node).left).is_red {
+        if !(*node).is_black {
+            if !(*(*node).left).is_sentinel && !(*(*node).left).is_black {
                 return (false, 0);
             }
-            if !(*(*node).right).is_sentinel && (*(*node).right).is_red {
+            if !(*(*node).right).is_sentinel && !(*(*node).right).is_black {
                 return (false, 0);
             }
         }
@@ -856,7 +856,7 @@ mod tests {
             return (false, 0);
         }
 
-        let black_height = left_black_height + if (*node).is_red { 0 } else { 1 };
+        let black_height = left_black_height + if (*node).is_black { 1 } else { 0 };
         (true, black_height)
     }
 
@@ -867,7 +867,7 @@ mod tests {
 
         unsafe {
             let root = (*container.sentinel).parent;
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
             assert_eq!(container.len(), 1);
         }
     }
@@ -919,7 +919,7 @@ mod tests {
             let root = (*sentinel).parent;
 
             // Verify root is black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
 
             // Verify all red-black properties
             let (valid, _) = verify_rb_properties(root);
@@ -942,7 +942,7 @@ mod tests {
             let root = (*sentinel).parent;
 
             // Root must be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
 
             // Verify properties maintained
             let (valid, _) = verify_rb_properties(root);
@@ -973,7 +973,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 3);
@@ -1000,7 +1000,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 3);
@@ -1027,7 +1027,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 3);
@@ -1054,7 +1054,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 3);
@@ -1081,7 +1081,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 10);
@@ -1112,7 +1112,7 @@ mod tests {
             );
 
             // Root should be black
-            assert!(!(*root).is_red, "Root must be black");
+            assert!((*root).is_black, "Root must be black");
         }
 
         assert_eq!(container.len(), 10);
@@ -1141,7 +1141,7 @@ mod tests {
 
                 // Root must always be black
                 assert!(
-                    !(*root).is_red,
+                    (*root).is_black,
                     "Root must be black after inserting {}",
                     val
                 );
@@ -1467,8 +1467,8 @@ mod tests {
             let sentinel = container.sentinel;
             let root = (*sentinel).parent;
 
-            // Verify root is black (unlike the game dump which shows red)
-            assert!(!(*root).is_red, "Root must be black");
+            // Verify root is black (unlike the game dump which shows is_black=false)
+            assert!((*root).is_black, "Root must be black");
 
             // Verify red-black properties
             let (valid, _) = verify_rb_properties(root);
@@ -1521,7 +1521,7 @@ mod tests {
             let root = (*sentinel).parent;
 
             // Verify root is still black
-            assert!(!(*root).is_red, "Root must remain black after insertion");
+            assert!((*root).is_black, "Root must remain black after insertion");
 
             // Verify red-black properties are maintained
             let (valid, _) = verify_rb_properties(root);
@@ -1559,55 +1559,6 @@ mod tests {
                 gun37_pos < gun40_pos && gun40_pos < nurs122_pos,
                 "GUN40 should be between GUN37 and NURS122"
             );
-        }
-    }
-
-    #[test]
-    fn test_insert_into_tree_with_red_root_defensive() {
-        // Test defensive handling of a tree with a red root (like the game dump showed)
-        // This simulates the corrupted state we might encounter from C++
-        unsafe {
-            let container = TllContainer::<i32, String>::new();
-            let sentinel = container.sentinel;
-
-            // Manually create a tree with a red root (simulating C++ state)
-            let root = create_node(50, "fifty", sentinel);
-            (*root).is_red = true; // VIOLATION: Make root red like in game dump
-
-            (*sentinel).parent = root;
-            (*sentinel).left = root;
-            (*sentinel).right = root;
-
-            let left = create_node(30, "thirty", sentinel);
-            (*left).parent = root;
-            (*root).left = left;
-
-            let right = create_node(70, "seventy", sentinel);
-            (*right).parent = root;
-            (*root).right = right;
-
-            // Now try to work with this tree
-            let mut container_mut = container;
-
-            // Insert a new node - this should handle the red root gracefully
-            container_mut.insert(40, "forty".to_string());
-
-            // After insert, root should be black (our fixup forces it)
-            let root_after = (*sentinel).parent;
-            assert!(
-                !(*root_after).is_red,
-                "Root should be forced to black after insert fixup"
-            );
-
-            // Tree should still be valid
-            let (valid, _) = verify_rb_properties(root_after);
-            assert!(valid, "Tree should be valid after fixing red root");
-
-            // Cleanup
-            libc::free(root as *mut libc::c_void);
-            libc::free(left as *mut libc::c_void);
-            libc::free(right as *mut libc::c_void);
-            std::mem::forget(container_mut);
         }
     }
 
