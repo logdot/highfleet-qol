@@ -85,15 +85,15 @@ impl<T, U> TllContainer<T, U> {
     /// This returns a reference to the sentinel node.
     ///
     /// We assume that the sentinel node is always valid as long as the TllContainer is valid.
-    pub fn get_sentinel(&self) -> &Tll<T, U> {
-        unsafe { &*self.sentinel }
+    pub fn get_sentinel(&mut self) -> &mut Tll<T, U> {
+        unsafe { &mut *self.sentinel }
     }
 
-    pub fn get_items(&self) -> Vec<&U> {
+    pub fn get_items(&mut self) -> Vec<&mut U> {
         self.get_sentinel().into()
     }
 
-    pub fn get_map(&self) -> std::collections::HashMap<&T, &U>
+    pub fn get_map(&mut self) -> std::collections::HashMap<&T, &mut U>
     where
         T: Eq + Hash,
     {
@@ -338,26 +338,6 @@ impl<T, U> Tll<T, U> {
             Some((*self.parent).parent)
         }
     }
-
-    unsafe fn uncle(&self) -> Option<*mut Tll<T, U>> {
-        let gp = self.grandparent()?;
-
-        if std::ptr::eq((*gp).left, self.parent) {
-            Some((*gp).right)
-        } else {
-            Some((*gp).left)
-        }
-    }
-
-    unsafe fn sibling(&self) -> Option<*mut Tll<T, U>> {
-        if (*self.parent).is_sentinel {
-            None
-        } else if std::ptr::eq((*self.parent).left, self as *const _ as *mut _) {
-            Some((*self.parent).right)
-        } else {
-            Some((*self.parent).left)
-        }
-    }
 }
 
 impl<T, U> Drop for TllContainer<T, U> {
@@ -371,8 +351,8 @@ impl<T, U> Drop for TllContainer<T, U> {
     }
 }
 
-impl<T, U> From<&Tll<T, U>> for Vec<&U> {
-    fn from(tll: &Tll<T, U>) -> Self {
+impl<T, U> From<&mut Tll<T, U>> for Vec<&mut U> {
+    fn from(tll: &mut Tll<T, U>) -> Self {
         let mut result = Vec::new();
 
         unsafe {
@@ -383,7 +363,7 @@ impl<T, U> From<&Tll<T, U>> for Vec<&U> {
 
                 in_order_traverse(tll.parent, &mut result);
             } else {
-                in_order_traverse(tll as *const Tll<T, U>, &mut result);
+                in_order_traverse(tll as *mut Tll<T, U>, &mut result);
             }
         }
 
@@ -391,8 +371,8 @@ impl<T, U> From<&Tll<T, U>> for Vec<&U> {
     }
 }
 
-impl<T: Eq + Hash, U> From<&Tll<T, U>> for std::collections::HashMap<&T, &U> {
-    fn from(tll: &Tll<T, U>) -> Self {
+impl<T: Eq + Hash, U> From<&mut Tll<T, U>> for std::collections::HashMap<&T, &mut U> {
+    fn from(tll: &mut Tll<T, U>) -> Self {
         let mut result = std::collections::HashMap::new();
 
         unsafe {
@@ -411,7 +391,7 @@ impl<T: Eq + Hash, U> From<&Tll<T, U>> for std::collections::HashMap<&T, &U> {
                 }
             } else {
                 let mut items = Vec::new();
-                in_order_traverse(tll as *const Tll<T, U>, &mut items);
+                in_order_traverse(tll as *mut Tll<T, U>, &mut items);
 
                 for item in items {
                     let key = item.0;
@@ -425,14 +405,14 @@ impl<T: Eq + Hash, U> From<&Tll<T, U>> for std::collections::HashMap<&T, &U> {
     }
 }
 
-unsafe fn in_order_traverse<T, U>(node: *const Tll<T, U>, result: &mut Vec<(&T, &U)>) {
+unsafe fn in_order_traverse<T, U>(node: *mut Tll<T, U>, result: &mut Vec<(&T, &mut U)>) {
     if node.is_null() || (*node).is_sentinel {
         return;
     }
 
     in_order_traverse((*node).left, result);
-    let node_ref = &*node;
-    result.push((&node_ref.key, &node_ref.data));
+    let node_ref = &mut *node;
+    result.push((&node_ref.key, &mut node_ref.data));
     in_order_traverse((*node).right, result);
 }
 
