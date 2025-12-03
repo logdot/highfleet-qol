@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
 /// Basically a c std::Vector
@@ -79,6 +79,20 @@ impl<T: Serialize> Serialize for CVec<T> {
     {
         let vec: Vec<&T> = self.into();
         vec.serialize(serializer)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for CVec<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<T> = Vec::deserialize(deserializer)?;
+        let mut cvec = CVec::empty();
+        for item in vec {
+            cvec.insert(item);
+        }
+        Ok(cvec)
     }
 }
 
