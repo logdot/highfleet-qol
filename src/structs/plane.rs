@@ -3,7 +3,7 @@ use serde::{Serialize, Serializer};
 use crate::structs::{cvec::CVec, loadout::Loadout};
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Plane {
     pub _padding: [u8; 8],
     pub loadouts: CVec<*const Loadout>,

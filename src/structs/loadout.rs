@@ -1,11 +1,10 @@
 use highfleet::general::EscadraString;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::structs::cvec::CVec;
 
 #[repr(C)]
-#[derive(Debug, Clone, Serialize)]
-#[serde(into = "String")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Represents an individual munition on a plane
 pub struct ItemMunition {
     /// Name of the item.
@@ -17,7 +16,7 @@ pub struct ItemMunition {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 /// Represents a loadout object inside a Tll
 pub struct Loadout {
     pub plane_loadout: EscadraString,
@@ -28,10 +27,4 @@ pub struct Loadout {
     pub has_gun37mm: bool,
     #[serde(skip)]
     pub _padding: [u8; 3],
-}
-
-impl From<ItemMunition> for String {
-    fn from(loadout: ItemMunition) -> Self {
-        format!("{} x {}", loadout.name.get_string(), loadout.count)
-    }
 }
