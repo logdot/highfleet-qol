@@ -1,6 +1,9 @@
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
+use highfleet::v1_163::EscadraString;
 use serde::{Deserialize, Serialize};
+
+use crate::{plane, structs::loadout::Loadout};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -11,10 +14,13 @@ pub struct Config {
     pub max_zoom_level: u8,
     pub min_zoom_level: u8,
     pub zoom_levels: Vec<f32>,
+    pub planes: HashMap<EscadraString, Vec<Loadout>>,
 }
 
 impl Default for Config {
     fn default() -> Self {
+        let plane_config = plane::get_planes();
+
         Self {
             enable_anti_wobble: false,
             enable_unblocked_guns: false,
@@ -23,6 +29,7 @@ impl Default for Config {
             max_zoom_level: 5,
             min_zoom_level: 3,
             zoom_levels: vec![14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
+            planes: plane_config,
         }
     }
 }

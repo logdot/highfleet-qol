@@ -5,93 +5,93 @@ use serde::Serialize;
 
 use crate::structs::{cvec::CVec, loadout, plane::Plane, tll::TllContainer};
 
-pub unsafe fn patch_planes() {
-    let loadout_tll_addr: u64;
+fn get_plane_tll_addr() -> u64 {
     if cfg!(feature = "1_151") {
-        loadout_tll_addr = 0x143944528;
+        0x143942740
     } else if cfg!(feature = "1_163") {
-        loadout_tll_addr = 0x143a15a60;
+        0x143a13c50
     } else {
         // Default to 1.163
-        loadout_tll_addr = 0x143a15a60;
+        0x143a13c50
     }
+}
 
-    let tll_container_ptr = loadout_tll_addr as *const TllContainer<EscadraString, loadout::Loadout>
-        as *mut TllContainer<EscadraString, loadout::Loadout>;
-
-    log::info!("Inserting custom loadout LOADOUT_LA29_GUN40");
-    let tll_container = &mut *tll_container_ptr;
-    tll_container.insert(
-        EscadraString::from("LOADOUT_LA29_GUN40"),
-        loadout::Loadout {
-            plane_loadout: EscadraString::from("LOADOUT_LA29_GUN40"),
-            generic_loadout: EscadraString::from("LOADOUT_GUN37"),
-            items: CVec::empty(),
-            launch_loadout_weight: 9999,
-            has_gun37mm: true,
-            _padding: [0; 3],
-        },
-    );
-
-    tll_container.insert(
-        EscadraString::from("LOADOUT_MB210_GUN37"),
-        loadout::Loadout {
-            plane_loadout: EscadraString::from("LOADOUT_MB210_GUN37"),
-            generic_loadout: EscadraString::from("LOADOUT_GUN37"),
-            items: CVec::empty(),
-            launch_loadout_weight: 9999,
-            has_gun37mm: true,
-            _padding: [0; 3],
-        },
-    );
-    log::info!("Custom loadout inserted.");
-
-    let loadouts = tll_container.get_map();
-    let la29_loadout = loadouts
-        .get(&EscadraString::from("LOADOUT_LA29_GUN40"))
-        .expect("Custom loadout should have been inserted");
-
-    let mb210_loadout = loadouts
-        .get(&EscadraString::from("LOADOUT_MB210_GUN37"))
-        .expect("Custom loadout should have been inserted");
-
-    let plane_tll_addr: u64;
+fn get_loadout_tll_addr() -> u64 {
     if cfg!(feature = "1_151") {
-        plane_tll_addr = 0x143942740;
+        0x143944528
     } else if cfg!(feature = "1_163") {
-        plane_tll_addr = 0x143a13c50;
+        0x143a15a60
     } else {
         // Default to 1.163
-        plane_tll_addr = 0x143a13c50;
+        0x143a15a60
     }
+}
 
-    let plane_tll_ptr = plane_tll_addr as *const TllContainer<EscadraString, Plane>
+pub fn get_planes() -> HashMap<EscadraString, Vec<loadout::Loadout>> {
+    let loadout_tll_addr = get_plane_tll_addr();
+    let tll_container_ptr = loadout_tll_addr as *const TllContainer<EscadraString, Plane>
         as *mut TllContainer<EscadraString, Plane>;
-    let plane_container = &mut *plane_tll_ptr;
-    plane_container.insert(
-        EscadraString::from("CRAFT_MB210"),
-        Plane {
+
+    unsafe {
+        let tll_container = &mut *tll_container_ptr;
+
+        tll_container
+            .get_map()
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.loadouts
+                        .items()
+                        .into_iter()
+                        .map(|&ptr| (*ptr).clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+}
+
+pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::Loadout>>) {
+    // Load all loadouts from config
+    let mut new_loadouts = TllContainer::<EscadraString, loadout::Loadout>::new();
+    for plane_loadouts in planes.values() {
+        for loadout in plane_loadouts {
+            new_loadouts.insert(loadout.plane_loadout.clone(), loadout.clone());
+        }
+    }
+
+    // Load planes and set loadouts
+    let mut new_planes = TllContainer::<EscadraString, Plane>::new();
+    for (plane_name, plane_loadouts) in planes.iter() {
+        let mut plane = Plane {
             _padding: [0; 8],
             loadouts: CVec::empty(),
-        },
-    );
+        };
 
-    let mut planes = plane_container.get_map();
-    let la29 = planes
-        .get_mut(&EscadraString::from("CRAFT_LA29"))
-        .expect("LA29 should always exist");
-    la29.loadouts
-        .insert(*la29_loadout as *const loadout::Loadout);
-    log::info!("Custom loadout added to LA29 plane.");
+        let new_loadout_map = new_loadouts.get_map();
 
-    let mb210 = planes
-        .get_mut(&EscadraString::from("CRAFT_MB210"))
-        .expect("MB210 should always exist");
-    mb210
-        .loadouts
-        .insert(*mb210_loadout as *const loadout::Loadout);
-    log::info!("Custom loadout added to MB210 plane.");
+        for loadout in plane_loadouts {
+            plane
+                .loadouts
+                .insert(*new_loadout_map.get(&loadout.plane_loadout).unwrap()
+                    as *const loadout::Loadout);
+        }
 
+        new_planes.insert(plane_name.clone(), plane);
+    }
+
+    // Write loadouts to game's loadout TLL
+    let loadout_tll_ptr: *mut TllContainer<EscadraString, loadout::Loadout> =
+        get_loadout_tll_addr() as *mut TllContainer<EscadraString, loadout::Loadout>;
+    std::ptr::write(loadout_tll_ptr, new_loadouts);
+
+    // Write planes to game's plane TLL
+    let plane_tll_ptr: *mut TllContainer<EscadraString, Plane> =
+        get_plane_tll_addr() as *mut TllContainer<EscadraString, Plane>;
+    std::ptr::write(plane_tll_ptr, new_planes);
+
+    read_tll(loadout_tll_ptr);
     read_tll(plane_tll_ptr);
 }
 

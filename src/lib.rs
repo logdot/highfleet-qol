@@ -80,7 +80,7 @@ unsafe extern "C" fn init() -> bool {
         log::info!("Reduced shake disabled");
     }
 
-    plane::patch_planes();
+    plane::patch_planes(&config.planes);
 
     true
 }
