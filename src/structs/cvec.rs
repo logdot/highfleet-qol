@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 /// Basically a c std::Vector
 pub struct CVec<T> {
     /// Pointer to the start of the items array.
@@ -49,6 +49,10 @@ impl<T> CVec<T> {
             std::ptr::write(self.items_end as *mut T, item);
             self.items_end = self.items_end.add(1);
         }
+    }
+
+    pub fn items(&self) -> Vec<&T> {
+        Vec::from(self)
     }
 
     /// Returns the number of items in the CVec.
