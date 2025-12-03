@@ -57,7 +57,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::Loadout>
     let mut new_loadouts = TllContainer::<EscadraString, loadout::Loadout>::new();
     for plane_loadouts in planes.values() {
         for loadout in plane_loadouts {
-            new_loadouts.insert(loadout.plane_loadout.clone(), loadout.clone());
+            new_loadouts.insert(loadout.oid.clone(), loadout.clone());
         }
     }
 
@@ -74,8 +74,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::Loadout>
         for loadout in plane_loadouts {
             plane
                 .loadouts
-                .insert(*new_loadout_map.get(&loadout.plane_loadout).unwrap()
-                    as *const loadout::Loadout);
+                .insert(*new_loadout_map.get(&loadout.oid).unwrap() as *const loadout::Loadout);
         }
 
         new_planes.insert(plane_name.clone(), plane);

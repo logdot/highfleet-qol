@@ -19,10 +19,9 @@ pub struct ItemMunition {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 /// Represents a loadout object inside a Tll
 pub struct Loadout {
-    pub plane_loadout: EscadraString,
-    pub generic_loadout: EscadraString,
-    /// Array of items.
-    pub items: CVec<ItemMunition>,
+    pub oid: EscadraString,
+    pub icon: EscadraString,
+    pub vec_parts: CVec<ItemMunition>,
     pub launch_loadout_weight: u32,
     pub has_gun37mm: bool,
     #[serde(skip)]
