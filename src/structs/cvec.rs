@@ -146,3 +146,13 @@ impl<T> From<&CVec<T>> for Vec<&T> {
         result
     }
 }
+
+impl<T: Clone> Clone for CVec<T> {
+    fn clone(&self) -> Self {
+        let mut new_cvec = CVec::empty();
+        for item in self.items() {
+            new_cvec.insert(item.clone());
+        }
+        new_cvec
+    }
+}
