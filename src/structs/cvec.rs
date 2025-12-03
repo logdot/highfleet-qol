@@ -156,3 +156,9 @@ impl<T: Clone> Clone for CVec<T> {
         new_cvec
     }
 }
+
+impl<T> Default for CVec<T> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
