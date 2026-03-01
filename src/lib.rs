@@ -27,11 +27,18 @@ unsafe extern "C" fn init() -> bool {
             log::error!("Using default config");
             let conf = Config::default();
 
-            // Save the default config
-            if let Err(e) = conf.save("Modloader/config/qol.json") {
-                log::error!("Failed to save default config: {}", e);
+            // Check if default config exists
+            if std::path::Path::new("Modloader/config/qol.json").exists() {
+                log::error!(
+                    "Config file exists but failed to load. Please check the file for errors."
+                );
             } else {
-                log::info!("Default config saved to Modloader/config/qol.json");
+                // Save the default config
+                if let Err(e) = conf.save("Modloader/config/qol.json") {
+                    log::error!("Failed to save default config: {}", e);
+                } else {
+                    log::info!("Default config saved to Modloader/config/qol.json");
+                }
             }
 
             conf
