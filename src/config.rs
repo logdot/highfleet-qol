@@ -16,7 +16,14 @@ pub struct Config {
     pub zoom_levels: Vec<f32>,
     pub planes: HashMap<EscadraString, Vec<Loadout>>,
     pub enable_shop_parts: bool,
-    pub shop_parts: Vec<String>,
+    pub shop_parts: HashMap<String, ShopPart>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShopPart {
+    pub probability: f32,
+    pub min_parts: u32,
+    pub max_parts: u32,
 }
 
 impl Default for Config {
@@ -33,7 +40,7 @@ impl Default for Config {
             zoom_levels: vec![14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
             planes: plane_config,
             enable_shop_parts: false,
-            shop_parts: Vec::new(),
+            shop_parts: HashMap::new(),
         }
     }
 }

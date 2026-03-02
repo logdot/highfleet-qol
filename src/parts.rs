@@ -2,13 +2,32 @@
 //!
 //! This module hooks after an existing DefinePart call in the weapons category section
 //! of the shop generation function, and calls DefinePart for each user-configured part string.
+//!
+//! Each part has a configurable probability of appearing and a random count in
+//! `[min_parts, max_parts]`, rolled fresh every time the shop generation runs.
 
-use std::ffi::CString;
+use std::{collections::HashMap, ffi::CString};
 
-use crate::patchy::{Patch, ReturnType};
+use crate::{
+    config::ShopPart,
+    patchy::{Patch, ReturnType},
+    rng,
+};
 
-/// The list of custom part strings to inject into weapon shops.
-static mut CUSTOM_PARTS: Vec<CString> = Vec::new();
+/// Stored representation of a custom part with its RNG parameters.
+struct CustomPart {
+    /// Null-terminated model ID string for DefinePart.
+    moid: CString,
+    /// Probability in [0.0, 1.0] that this part appears in a shop.
+    probability: f32,
+    /// Minimum number of this part to spawn (inclusive).
+    min_parts: u32,
+    /// Maximum number of this part to spawn (inclusive).
+    max_parts: u32,
+}
+
+/// The list of custom parts (with config) to inject into weapon shops.
+static mut CUSTOM_PARTS: Vec<CustomPart> = Vec::new();
 
 // DefinePart function address
 // Body * __fastcall DefinePart(Body * allPartLibrary, char * moid, Node * categoryLibrary, int count)
@@ -48,13 +67,15 @@ const HOOK_ADDRESS: usize = 0x0;
 
 /// Patches the shop generation to include custom parts.
 ///
-/// `parts` is a list of part model ID strings (e.g. `"MDL_WEAPON_01"`) that will be
-/// added to weapon shops via DefinePart with a count of 1.
+/// `parts` is a map of part model ID strings (e.g. `"MDL_WEAPON_01"`) to their
+/// [`ShopPart`] configuration (probability, min/max count). Each time a shop is
+/// generated the probability is rolled independently per part; if it passes, a
+/// random count in `[min_parts, max_parts]` is chosen.
 ///
 /// # Safety
 /// Must be called while the game process memory is accessible and before the shop
 /// generation function runs.
-pub unsafe fn patch_custom_parts(parts: Vec<String>) {
+pub unsafe fn patch_custom_parts(parts: HashMap<String, ShopPart>) {
     if parts.is_empty() {
         log::info!("No custom parts to inject, skipping patch.");
         return;
@@ -65,13 +86,30 @@ pub unsafe fn patch_custom_parts(parts: Vec<String>) {
         return;
     }
 
-    // Convert to CStrings so we have stable null-terminated pointers
-    let custom_parts: Vec<CString> = parts
+    // Convert to CustomPart structs with stable CString pointers
+    let custom_parts: Vec<CustomPart> = parts
         .into_iter()
-        .filter_map(|s| match CString::new(s.clone()) {
-            Ok(cs) => Some(cs),
+        .filter_map(|(name, cfg)| match CString::new(name.clone()) {
+            Ok(cs) => {
+                let probability = cfg.probability.clamp(0.0, 1.0);
+                let min_parts = cfg.min_parts.max(1);
+                let max_parts = cfg.max_parts.max(min_parts);
+                log::info!(
+                    "  Part '{}': probability={:.0}%, count=[{}, {}]",
+                    name,
+                    probability * 100.0,
+                    min_parts,
+                    max_parts,
+                );
+                Some(CustomPart {
+                    moid: cs,
+                    probability,
+                    min_parts,
+                    max_parts,
+                })
+            }
             Err(e) => {
-                log::error!("Invalid part string '{}': {}", s, e);
+                log::error!("Invalid part string '{}': {}", name, e);
                 None
             }
         })
@@ -83,9 +121,12 @@ pub unsafe fn patch_custom_parts(parts: Vec<String>) {
     }
 
     log::info!(
-        "Patching shop generation to inject {} custom part(s).",
+        "Patching shop generation to inject up to {} custom part type(s).",
         custom_parts.len()
     );
+
+    // Seed the RNG once at init time.
+    rng::seed();
 
     // SAFETY: We only write to CUSTOM_PARTS once during init, before any reads occur.
     CUSTOM_PARTS = custom_parts;
@@ -117,7 +158,8 @@ unsafe fn get_category_node() -> *const u8 {
 }
 
 /// Called from the patch cave after the original DefinePart call.
-/// Iterates over all custom parts and calls DefinePart for each one.
+/// Iterates over all custom parts, rolls probability, picks a random count,
+/// and calls DefinePart for each part that passes the check.
 ///
 /// On x86_64 Windows the standard calling convention (used by `__fastcall`)
 /// passes the first four integer/pointer arguments in RCX, RDX, R8, R9,
@@ -148,7 +190,14 @@ unsafe extern "C" fn inject_custom_parts() {
     // can ever fire. After that it is effectively read-only.
     let parts_ptr = std::ptr::addr_of!(CUSTOM_PARTS);
     for part in (*parts_ptr).iter() {
-        let moid_ptr = part.as_ptr() as *const u8;
-        define_part(all_part_library, moid_ptr, category_node, 10);
+        let roll = rng::random_f32();
+        if roll >= part.probability {
+            continue;
+        }
+
+        let count = rng::random_range(part.min_parts, part.max_parts) as i32;
+
+        let moid_ptr = part.moid.as_ptr() as *const u8;
+        define_part(all_part_library, moid_ptr, category_node, count);
     }
 }

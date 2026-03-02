@@ -14,6 +14,7 @@ mod logger;
 mod parts;
 mod patchy;
 mod plane;
+mod rng;
 mod shake;
 mod structs;
 mod zoom;
