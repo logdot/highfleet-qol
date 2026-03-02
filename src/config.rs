@@ -15,6 +15,8 @@ pub struct Config {
     pub min_zoom_level: u8,
     pub zoom_levels: Vec<f32>,
     pub planes: HashMap<EscadraString, Vec<Loadout>>,
+    pub enable_shop_parts: bool,
+    pub shop_parts: Vec<String>,
 }
 
 impl Default for Config {
@@ -30,6 +32,8 @@ impl Default for Config {
             min_zoom_level: 3,
             zoom_levels: vec![14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
             planes: plane_config,
+            enable_shop_parts: false,
+            shop_parts: Vec::new(),
         }
     }
 }

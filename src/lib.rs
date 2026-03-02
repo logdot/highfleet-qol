@@ -11,6 +11,7 @@ mod dumpable;
 mod guns;
 #[cfg(debug_assertions)]
 mod logger;
+mod parts;
 mod patchy;
 mod plane;
 mod shake;
@@ -88,6 +89,13 @@ unsafe extern "C" fn init() -> bool {
     }
 
     plane::patch_planes(&config.planes);
+
+    if config.enable_shop_parts {
+        parts::patch_custom_parts(config.shop_parts);
+        log::info!("Custom parts enabled");
+    } else {
+        log::info!("Custom parts disabled");
+    }
 
     true
 }
