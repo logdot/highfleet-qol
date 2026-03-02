@@ -18,6 +18,11 @@ pub enum ReturnType {
 const CALL_BYTES: [u8; 8] = [0xff, 0x15, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x08];
 const NEAR_JUMP: [u8; 1] = [0xe9];
 
+// SUB RSP, 0x8 — used to fix 16-byte stack alignment when push count is odd
+const ALIGN_STACK: [u8; 4] = [0x48, 0x83, 0xEC, 0x08];
+// ADD RSP, 0x8 — undoes the alignment padding
+const UNALIGN_STACK: [u8; 4] = [0x48, 0x83, 0xC4, 0x08];
+
 // PUSH RAX
 const SAVE_RAX: [u8; 1] = [0x50];
 // MOVDQU [RSP + 0x00], XMM0
@@ -72,7 +77,8 @@ impl Patch {
     /// `size` determines how many bytes are overwritten for call, must be at least 4.
     ///
     /// # Safety
-    /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original code.
+    /// It is the responsibility of the caller to ensure that the inserted function is compatible with the original ASM.
+    /// That means you generally must not split instructions.
     pub unsafe fn patch_call(
         address: usize,
         function: *const (),
@@ -136,12 +142,20 @@ impl Patch {
             write_data(mem, &mut offset, &overwritten);
         }
 
-        // If we aren't returning in RAX, we need to save it to not mess up the original code
-        if allow_return != ReturnType::Rax {
+        // If we aren't returning in RAX, we need to save it to not mess up the original code.
+        // This also means we have an odd number of pushes (PUSH RAX + 6 volatile regs = 7),
+        // so we need an extra 8-byte alignment pad to keep RSP 16-byte aligned before the CALL.
+        let needs_alignment = allow_return != ReturnType::Rax;
+        if needs_alignment {
             write_data(mem, &mut offset, &SAVE_RAX);
         }
         // Save clobbered registers to save their state
         write_data(mem, &mut offset, &SAVE_REGISTERS);
+        // Fix 16-byte stack alignment when push count is odd (7 pushes + SUB 0x60 = 0x98,
+        // which is 8 mod 16; the extra SUB 0x8 brings it to 0xA0 = 0 mod 16).
+        if needs_alignment {
+            write_data(mem, &mut offset, &ALIGN_STACK);
+        }
         // if we aren't returning in XMM0, save it to not mess up the original code
         if allow_return != ReturnType::Xmm0 {
             write_data(mem, &mut offset, &SAVE_XMM0);
@@ -154,10 +168,14 @@ impl Patch {
         if allow_return != ReturnType::Xmm0 {
             write_data(mem, &mut offset, &LOAD_XMM0);
         }
+        // Undo the alignment padding before restoring registers
+        if needs_alignment {
+            write_data(mem, &mut offset, &UNALIGN_STACK);
+        }
         // Load clobbered registers to restore state
         write_data(mem, &mut offset, &LOAD_REGISTERS);
-        // If we aren't returning in RAX, load it to it's original state
-        if allow_return != ReturnType::Rax {
+        // If we aren't returning in RAX, load it to its original state
+        if needs_alignment {
             write_data(mem, &mut offset, &LOAD_RAX);
         }
 
