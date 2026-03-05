@@ -24,6 +24,9 @@ struct CustomPart {
     min_parts: u32,
     /// Maximum number of this part to spawn (inclusive).
     max_parts: u32,
+    /// Optional list of city types (1–7) where this part can appear.
+    /// If empty, the part appears in all city types.
+    city_types: Vec<u32>,
 }
 
 /// The list of custom parts (with config) to inject into weapon shops.
@@ -35,25 +38,34 @@ static mut CUSTOM_PARTS: Vec<CustomPart> = Vec::new();
 #[cfg(feature = "1_151")]
 const DEFINE_PART_FN: usize = 0x1401fde40;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const DEFINE_PART_FN: usize = 0x0;
+const DEFINE_PART_FN: usize = 0x14021b190;
 
 // Address of pointer to allPartLibrary (first arg to DefinePart, in RCX)
 #[cfg(feature = "1_151")]
 const ALL_PART_LIBRARY_PTR: usize = 0x143942568;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const ALL_PART_LIBRARY_PTR: usize = 0x0;
+const ALL_PART_LIBRARY_PTR: usize = 0x143a139f0;
 
-// Address of pointer to the root node used to resolve the category library (in R8)
-// We follow [0x1439220f0] -> +0x348 if non-null, else fall back to [0x147eed968]
+const CITY_TYPE_OFFSET: usize = 0x25c;
+
+// Offset from the city object to the category library node pointer.
+#[cfg(feature = "1_151")]
+const CATEGORY_NODE_OFFSET: usize = 0x69;
+#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
+const CATEGORY_NODE_OFFSET: usize = 0x348;
+
+// Address of pointer to the city object, used to resolve the category library (in R8)
+// via +CATEGORY_NODE_OFFSET, and the city type (an i32 in 1–7) via +CITY_TYPE_OFFSET.
+// We follow [CATEGORY_ROOT_PTR] -> +CATEGORY_NODE_OFFSET if non-null, else fall back to [CATEGORY_FALLBACK_PTR].
 #[cfg(feature = "1_151")]
 const CATEGORY_ROOT_PTR: usize = 0x1439220f0;
 #[cfg(feature = "1_151")]
 const CATEGORY_FALLBACK_PTR: usize = 0x147eed968;
 
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const CATEGORY_ROOT_PTR: usize = 0x0;
+const CATEGORY_ROOT_PTR: usize = 0x143a11940;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const CATEGORY_FALLBACK_PTR: usize = 0x0;
+const CATEGORY_FALLBACK_PTR: usize = 0x147fc6f90;
 
 // Hook address: right after a DefinePart call for MDL_ANTENNA_01 in the shop generation function.
 // At 0x14029ae0f there is one instruction:
@@ -63,7 +75,7 @@ const CATEGORY_FALLBACK_PTR: usize = 0x0;
 #[cfg(feature = "1_151")]
 const HOOK_ADDRESS: usize = 0x14029ae0f;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const HOOK_ADDRESS: usize = 0x0;
+const HOOK_ADDRESS: usize = 0x1402bdf1c;
 
 /// Patches the shop generation to include custom parts.
 ///
@@ -101,11 +113,16 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, ShopPart>) {
                     min_parts,
                     max_parts,
                 );
+                let city_types = cfg.city_types.clone();
+                if !city_types.is_empty() {
+                    log::info!("    city_types={:?}", city_types,);
+                }
                 Some(CustomPart {
                     moid: cs,
                     probability,
                     min_parts,
                     max_parts,
+                    city_types,
                 })
             }
             Err(e) => {
@@ -144,12 +161,33 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, ShopPart>) {
     std::mem::forget(p);
 }
 
+/// Reads the current city type from the city object.
+///
+/// Returns `Some(1..=7)` on success, or `None` if the city object pointer is null
+/// or the value is outside the expected range.
+unsafe fn read_city_type() -> Option<u32> {
+    if CATEGORY_ROOT_PTR == 0x0 {
+        return None;
+    }
+    let city_obj = *(CATEGORY_ROOT_PTR as *const *const u8);
+    if city_obj.is_null() {
+        return None;
+    }
+    let city_type = *((city_obj as usize + CITY_TYPE_OFFSET) as *const i32);
+    if (1..=7).contains(&city_type) {
+        Some(city_type as u32)
+    } else {
+        log::warn!("Unexpected city type value: {}", city_type);
+        None
+    }
+}
+
 /// Resolves the category library node pointer using the same logic as the game:
-/// Try `[CATEGORY_ROOT_PTR]` -> `+0x348`, fall back to `[CATEGORY_FALLBACK_PTR]`.
+/// Try `[CATEGORY_ROOT_PTR]` -> `+CATEGORY_NODE_OFFSET`, fall back to `[CATEGORY_FALLBACK_PTR]`.
 unsafe fn get_category_node() -> *const u8 {
     let root = *(CATEGORY_ROOT_PTR as *const *const u8);
     if !root.is_null() {
-        let node = *((root as usize + 0x348) as *const *const u8);
+        let node = *((root as usize + CATEGORY_NODE_OFFSET) as *const *const u8);
         if !node.is_null() {
             return node;
         }
@@ -186,10 +224,25 @@ unsafe extern "C" fn inject_custom_parts() {
         return;
     }
 
+    // Read the current city type (re-read every call since the pointer may change).
+    let city_type = read_city_type();
+
     // SAFETY: CUSTOM_PARTS is only written to once during init before this callback
     // can ever fire. After that it is effectively read-only.
     let parts_ptr = std::ptr::addr_of!(CUSTOM_PARTS);
     for part in (*parts_ptr).iter() {
+        // If the part has a city_types filter, skip it when the current city doesn't match.
+        if !part.city_types.is_empty() {
+            match city_type {
+                Some(ct) if part.city_types.contains(&ct) => { /* allowed */ }
+                Some(_) => continue,
+                None => {
+                    // Could not determine city type; skip filtered parts to be safe.
+                    continue;
+                }
+            }
+        }
+
         let roll = rng::random_f32();
         if roll >= part.probability {
             continue;

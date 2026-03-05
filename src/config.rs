@@ -24,6 +24,10 @@ pub struct ShopPart {
     pub probability: f32,
     pub min_parts: u32,
     pub max_parts: u32,
+    /// Optional list of city types (1–7) where this part can appear.
+    /// If empty or omitted, the part appears in all city types.
+    #[serde(default)]
+    pub city_types: Vec<u32>,
 }
 
 impl Default for Config {
