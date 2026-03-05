@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error};
 
 use highfleet::v1_163::EscadraString;
-use serde::{Deserialize, Serialize};
+use serde::{de::Deserializer, Deserialize, Serialize};
 
 use crate::{plane, structs::loadout::Loadout};
 
@@ -16,10 +16,11 @@ pub struct Config {
     pub zoom_levels: Vec<f32>,
     pub planes: HashMap<EscadraString, Vec<Loadout>>,
     pub enable_shop_parts: bool,
+    #[serde(default, deserialize_with = "deserialize_shop_parts")]
     pub shop_parts: HashMap<String, Vec<ShopPart>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShopPart {
     pub probability: f32,
     pub min_parts: u32,
@@ -28,6 +29,37 @@ pub struct ShopPart {
     /// If empty or omitted, the part appears in all city types.
     #[serde(default)]
     pub city_types: Vec<u32>,
+}
+
+/// Accepts either a single `ShopPart` object or an array of `ShopPart` objects.
+/// Used via `#[serde(untagged)]` so serde tries each variant in declaration order.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OneOrMany {
+    Many(Vec<ShopPart>),
+    One(ShopPart),
+}
+
+impl OneOrMany {
+    fn into_vec(self) -> Vec<ShopPart> {
+        match self {
+            OneOrMany::One(part) => vec![part],
+            OneOrMany::Many(parts) => parts,
+        }
+    }
+}
+
+/// Custom deserializer for `shop_parts` that accepts each value as either a
+/// single `ShopPart` object or an array of `ShopPart` objects, allowing both
+/// formats to coexist in the same config file.
+fn deserialize_shop_parts<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Vec<ShopPart>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: HashMap<String, OneOrMany> = HashMap::deserialize(deserializer)?;
+    Ok(raw.into_iter().map(|(k, v)| (k, v.into_vec())).collect())
 }
 
 impl Default for Config {
