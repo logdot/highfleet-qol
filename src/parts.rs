@@ -87,7 +87,7 @@ const HOOK_ADDRESS: usize = 0x1402bdf1c;
 /// # Safety
 /// Must be called while the game process memory is accessible and before the shop
 /// generation function runs.
-pub unsafe fn patch_custom_parts(parts: HashMap<String, ShopPart>) {
+pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) {
     if parts.is_empty() {
         log::info!("No custom parts to inject, skipping patch.");
         return;
@@ -98,37 +98,49 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, ShopPart>) {
         return;
     }
 
-    // Convert to CustomPart structs with stable CString pointers
+    // Convert to CustomPart structs with stable CString pointers.
+    // Each part name can have multiple ShopPart entries (e.g. different
+    // probabilities per city type), so we flatten them all into one list.
     let custom_parts: Vec<CustomPart> = parts
         .into_iter()
-        .filter_map(|(name, cfg)| match CString::new(name.clone()) {
-            Ok(cs) => {
-                let probability = cfg.probability.clamp(0.0, 1.0);
-                let min_parts = cfg.min_parts.max(1);
-                let max_parts = cfg.max_parts.max(min_parts);
-                log::info!(
-                    "  Part '{}': probability={:.0}%, count=[{}, {}]",
-                    name,
-                    probability * 100.0,
-                    min_parts,
-                    max_parts,
-                );
-                let city_types = cfg.city_types.clone();
-                if !city_types.is_empty() {
-                    log::info!("    city_types={:?}", city_types,);
+        .flat_map(|(name, cfgs)| {
+            let cs = match CString::new(name.clone()) {
+                Ok(cs) => cs,
+                Err(e) => {
+                    log::error!("Invalid part string '{}': {}", name, e);
+                    return Vec::new();
                 }
-                Some(CustomPart {
-                    moid: cs,
-                    probability,
-                    min_parts,
-                    max_parts,
-                    city_types,
+            };
+
+            cfgs.into_iter()
+                .filter_map({
+                    let name = name.clone();
+                    let cs = cs.clone();
+                    move |cfg| {
+                        let probability = cfg.probability.clamp(0.0, 1.0);
+                        let min_parts = cfg.min_parts.max(1);
+                        let max_parts = cfg.max_parts.max(min_parts);
+                        log::info!(
+                            "  Part '{}': probability={:.0}%, count=[{}, {}]",
+                            name,
+                            probability * 100.0,
+                            min_parts,
+                            max_parts,
+                        );
+                        let city_types = cfg.city_types.clone();
+                        if !city_types.is_empty() {
+                            log::info!("    city_types={:?}", city_types);
+                        }
+                        Some(CustomPart {
+                            moid: cs.clone(),
+                            probability,
+                            min_parts,
+                            max_parts,
+                            city_types,
+                        })
+                    }
                 })
-            }
-            Err(e) => {
-                log::error!("Invalid part string '{}': {}", name, e);
-                None
-            }
+                .collect::<Vec<_>>()
         })
         .collect();
 

@@ -16,7 +16,7 @@ pub struct Config {
     pub zoom_levels: Vec<f32>,
     pub planes: HashMap<EscadraString, Vec<Loadout>>,
     pub enable_shop_parts: bool,
-    pub shop_parts: HashMap<String, ShopPart>,
+    pub shop_parts: HashMap<String, Vec<ShopPart>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
