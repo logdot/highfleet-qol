@@ -17,6 +17,7 @@ mod plane;
 mod rng;
 mod shake;
 mod structs;
+mod ttl;
 mod zoom;
 
 #[no_mangle]
@@ -88,6 +89,13 @@ unsafe extern "C" fn init() -> bool {
         log::info!("Reduced shake enabled");
     } else {
         log::info!("Reduced shake disabled");
+    }
+
+    if config.enable_unblocked_ttl {
+        ttl::patch_ttl();
+        log::info!("Unblocked TTL enabled");
+    } else {
+        log::info!("Unblocked TTL disabled");
     }
 
     plane::patch_planes(&config.planes);
