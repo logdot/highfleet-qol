@@ -79,7 +79,8 @@ unsafe extern "C" fn init() -> bool {
         guns::patch_sector_blocking();
         log::info!("Unblocked guns enabled");
     } else {
-        log::info!("Unblocked guns disabled");
+        guns::patch_sector_restoration();
+        log::info!("Gun blocking enabled");
     }
 
     if config.enable_reduced_shake {

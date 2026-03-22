@@ -251,7 +251,7 @@ unsafe fn write_data(address: *mut u8, offset: &mut usize, data: &[u8]) {
 }
 
 /// Searches for a valid memory region that can be used for code within the 4GB address space for a jump.
-fn search_memory_cave(address: usize) -> Option<usize> {
+pub(crate) fn search_memory_cave(address: usize) -> Option<usize> {
     // 0x80000000 is equivalent to 2GB
     let lower_bound = address - 0x80000000 + MmapOptions::allocation_granularity();
     let upper_bound = address + 0x80000000 - MmapOptions::allocation_granularity();
