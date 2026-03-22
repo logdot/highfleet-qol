@@ -10,6 +10,7 @@ pub struct Config {
     pub enable_anti_wobble: bool,
     pub enable_unblocked_guns: bool,
     pub enable_reduced_shake: bool,
+    #[serde(default)]
     pub enable_unblocked_ttl: bool,
     pub enable_arcade_zoom: bool,
     pub max_zoom_level: u8,
