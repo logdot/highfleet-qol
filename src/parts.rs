@@ -49,9 +49,6 @@ const ALL_PART_LIBRARY_PTR: usize = 0x143a139f0;
 const CITY_TYPE_OFFSET: usize = 0x25c;
 
 // Offset from the city object to the category library node pointer.
-#[cfg(feature = "1_151")]
-const CATEGORY_NODE_OFFSET: usize = 0x69;
-#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 const CATEGORY_NODE_OFFSET: usize = 0x348;
 
 // Address of pointer to the city object, used to resolve the category library (in R8)
