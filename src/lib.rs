@@ -15,6 +15,7 @@ mod parts;
 mod patchy;
 mod plane;
 mod rng;
+mod sell_multiplier;
 mod shake;
 mod structs;
 mod ttl;
@@ -106,6 +107,8 @@ unsafe extern "C" fn init() -> bool {
     } else {
         log::info!("Custom parts disabled");
     }
+
+    sell_multiplier::patch_sell_multiplier(config.sell_multiplier);
 
     true
 }

@@ -20,6 +20,8 @@ pub struct Config {
     pub enable_shop_parts: bool,
     #[serde(default, deserialize_with = "deserialize_shop_parts")]
     pub shop_parts: HashMap<String, Vec<ShopPart>>,
+    #[serde(default = "default_sell_multiplier")]
+    pub sell_multiplier: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +53,10 @@ impl OneOrMany {
     }
 }
 
+fn default_sell_multiplier() -> f32 {
+    1.0
+}
+
 /// Custom deserializer for `shop_parts` that accepts each value as either a
 /// single `ShopPart` object or an array of `ShopPart` objects, allowing both
 /// formats to coexist in the same config file.
@@ -80,6 +86,7 @@ impl Default for Config {
             planes: plane_config,
             enable_shop_parts: false,
             shop_parts: HashMap::new(),
+            sell_multiplier: 1.0,
         }
     }
 }
