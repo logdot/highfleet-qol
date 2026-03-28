@@ -72,7 +72,7 @@ const CATEGORY_FALLBACK_PTR: usize = 0x147fc6f90;
 #[cfg(feature = "1_151")]
 const HOOK_ADDRESS: usize = 0x14029ae0f;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-const HOOK_ADDRESS: usize = 0x1402bdf1c;
+const HOOK_ADDRESS: usize = 0x1402bcd49;
 
 /// Patches the shop generation to include custom parts.
 ///
