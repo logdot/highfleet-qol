@@ -40,7 +40,7 @@ pub unsafe fn patch_sector_restoration() {
     const RETURN_ADDR: usize = 0x140032f29;
     const OVERWRITE_SIZE: usize = 7; // SUBSS XMM1,XMM7 (4) + COMISS XMM6,XMM1 (3)
 
-    let fn_ptr = is_gun_blocked as usize;
+    let fn_ptr = is_gun_blocked as *const () as usize;
 
     // --- Build the code cave trampoline ---
     //
