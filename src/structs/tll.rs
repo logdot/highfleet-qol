@@ -73,10 +73,12 @@ impl<T: Default, U: Default> TllContainer<T, U> {
 }
 
 impl<T, U> TllContainer<T, U> {
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.size
     }
@@ -89,6 +91,7 @@ impl<T, U> TllContainer<T, U> {
         unsafe { &mut *self.sentinel }
     }
 
+    #[allow(dead_code)]
     pub fn get_items(&mut self) -> Vec<&mut U> {
         self.get_sentinel().into()
     }
