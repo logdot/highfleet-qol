@@ -38,7 +38,13 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         override_count = 20;
     }
 
-    let p = Patch::patch_call(address, set_zoom_level as *const (), override_count, false, ReturnType::None);
+    let p = Patch::patch_call(
+        address,
+        set_zoom_level as *const (),
+        override_count,
+        false,
+        ReturnType::None,
+    );
     std::mem::forget(p);
 }
 
@@ -55,7 +61,13 @@ pub unsafe fn patch_levels(zoom_levels: Vec<f32>) {
         address = 0x14026b03f;
     }
 
-    let p = Patch::patch_call(address, calc_zoom_value as *const (), 5, false, ReturnType::Xmm0);
+    let p = Patch::patch_call(
+        address,
+        calc_zoom_value as *const (),
+        5,
+        false,
+        ReturnType::Xmm0,
+    );
     std::mem::forget(p);
 }
 

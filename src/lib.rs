@@ -8,6 +8,7 @@ use crate::config::Config;
 
 mod config;
 mod dumpable;
+mod flare_crash;
 mod guns;
 #[cfg(debug_assertions)]
 mod logger;
@@ -48,6 +49,12 @@ unsafe extern "C" fn init() -> bool {
             conf
         }
     };
+
+    if config.enable_flare_crash_fix {
+        flare_crash::patch_flare_crash();
+    } else {
+        log::info!("Flare crash fix disabled");
+    }
 
     if config.enable_anti_wobble {
         dumpable::dumpable();

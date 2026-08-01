@@ -10,6 +10,8 @@ pub struct Config {
     pub enable_anti_wobble: bool,
     pub enable_unblocked_guns: bool,
     pub enable_reduced_shake: bool,
+    #[serde(default = "default_flare_crash_fix")]
+    pub enable_flare_crash_fix: bool,
     #[serde(default)]
     pub enable_unblocked_ttl: bool,
     pub enable_arcade_zoom: bool,
@@ -53,6 +55,10 @@ impl OneOrMany {
     }
 }
 
+fn default_flare_crash_fix() -> bool {
+    true
+}
+
 fn default_sell_multiplier() -> f32 {
     1.0
 }
@@ -78,6 +84,7 @@ impl Default for Config {
             enable_anti_wobble: false,
             enable_unblocked_guns: false,
             enable_reduced_shake: false,
+            enable_flare_crash_fix: true,
             enable_unblocked_ttl: false,
             enable_arcade_zoom: true,
             max_zoom_level: 5,

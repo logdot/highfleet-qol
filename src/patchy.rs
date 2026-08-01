@@ -197,6 +197,50 @@ impl Patch {
         }
     }
 
+    /// Replaces `size` bytes at `address` with a near jump to `trampoline`.
+    ///
+    /// The trampoline is allocated within range of a 32-bit relative jump and
+    /// remains executable for as long as the returned patch is kept alive. The
+    /// trampoline must transfer control to the appropriate continuation itself.
+    ///
+    /// # Safety
+    /// The caller must provide valid machine code, overwrite whole instructions,
+    /// and ensure every trampoline exit preserves the surrounding function state.
+    pub unsafe fn detour(address: usize, size: usize, trampoline: &[u8]) -> Self {
+        assert!(size >= 5, "A detour requires at least five bytes");
+
+        let page_size = MmapOptions::page_size();
+        assert!(
+            trampoline.len() <= page_size,
+            "Trampoline is larger than one memory page"
+        );
+
+        let memory_cave = search_memory_cave(address).expect("No memory cave found");
+        let mut mmap = MmapOptions::new(page_size)
+            .unwrap()
+            .with_address(memory_cave)
+            .map_mut()
+            .expect("Unable to allocate memory map");
+        let trampoline_address = mmap.as_mut_ptr() as usize;
+
+        std::ptr::copy_nonoverlapping(trampoline.as_ptr(), mmap.as_mut_ptr(), trampoline.len());
+        let mmap = mmap
+            .make_exec()
+            .expect("Unable to make trampoline executable");
+
+        let jump_offset: i32 = (trampoline_address as isize - address as isize - 5)
+            .try_into()
+            .expect("Jump offset greater than 32 bits");
+        let mut patch_bytes = Vec::with_capacity(size);
+        patch_bytes.extend_from_slice(&NEAR_JUMP);
+        patch_bytes.extend_from_slice(&jump_offset.to_le_bytes());
+        patch_bytes.resize(size, 0x90);
+
+        let mut patch = Self::overwrite(address, &patch_bytes);
+        patch.mmap = Some(mmap);
+        patch
+    }
+
     pub unsafe fn overwrite(address: usize, data: &[u8]) -> Self {
         // Set EXECUTE READWRITE to allow writing to code section
         let mut old_protect = PAGE_PROTECTION_FLAGS(0);
