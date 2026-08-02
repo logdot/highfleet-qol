@@ -117,6 +117,11 @@ unsafe extern "C" fn init() -> bool {
 
     sell_multiplier::patch_sell_multiplier(config.sell_multiplier);
 
+    if let Err(error) = patchy::finalize_patches() {
+        log::error!("Unable to install prepared patches: {error}");
+        return false;
+    }
+
     true
 }
 
