@@ -32,7 +32,7 @@ pub unsafe fn patch_sector_restoration() {}
 ///    function and conditionally skips firing if blocked
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 pub unsafe fn patch_sector_restoration() {
-    use mmap_rs::MmapOptions;
+    use crate::patchy::{relative_offset, PatchError};
 
     // FireGun addresses in v1.163
     const INJECTION_ADDR: usize = 0x140032f22;
@@ -93,63 +93,35 @@ pub unsafe fn patch_sector_restoration() {
     let jmp_exit_off = cave.len();
     cave.extend_from_slice(&[0xE9, 0x00, 0x00, 0x00, 0x00]);
 
-    // --- Allocate executable memory near FireGun ---
-    let cave_addr = match crate::patchy::search_memory_cave(INJECTION_ADDR) {
-        Some(addr) => addr,
-        None => {
-            log::error!("gun_blocking: no memory cave found near FireGun");
-            return;
-        }
-    };
+    let trampoline_size = cave.len();
+    let p = Patch::detour_with(
+        INJECTION_ADDR,
+        OVERWRITE_SIZE,
+        trampoline_size,
+        move |cave_base| {
+            let mut code = cave.clone();
 
-    let mut mmap = match MmapOptions::new(MmapOptions::page_size())
-        .unwrap()
-        .with_address(cave_addr)
-        .map_mut()
-    {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("gun_blocking: mmap allocation failed: {e}");
-            return;
-        }
-    };
+            let src_back = cave_base
+                .checked_add(jmp_back_off + 5)
+                .ok_or(PatchError::AddressOverflow)?;
+            let rel_back = relative_offset(src_back, RETURN_ADDR)?;
+            code[jmp_back_off + 1..jmp_back_off + 5].copy_from_slice(&rel_back.to_le_bytes());
 
-    let cave_base = mmap.as_mut_ptr() as usize;
+            let src_exit = cave_base
+                .checked_add(jmp_exit_off + 5)
+                .ok_or(PatchError::AddressOverflow)?;
+            let rel_exit = relative_offset(src_exit, EXIT_0_ADDR)?;
+            code[jmp_exit_off + 1..jmp_exit_off + 5].copy_from_slice(&rel_exit.to_le_bytes());
 
-    // Fix up JMP back → RETURN_ADDR
-    let src_back = cave_base + jmp_back_off + 5;
-    let rel_back = (RETURN_ADDR as isize) - (src_back as isize);
-    cave[jmp_back_off + 1..jmp_back_off + 5].copy_from_slice(&(rel_back as i32).to_le_bytes());
-
-    // Fix up JMP exit → EXIT_0_ADDR
-    let src_exit = cave_base + jmp_exit_off + 5;
-    let rel_exit = (EXIT_0_ADDR as isize) - (src_exit as isize);
-    cave[jmp_exit_off + 1..jmp_exit_off + 5].copy_from_slice(&(rel_exit as i32).to_le_bytes());
-
-    // Write trampoline into the cave
-    std::ptr::copy_nonoverlapping(cave.as_ptr(), mmap.as_mut_ptr(), cave.len());
-
-    // Make executable (consume the MmapMut, get back an immutable exec Mmap)
-    let mmap = mmap.make_exec().expect("gun_blocking: make_exec failed");
-
-    // --- Patch the injection site ---
-    // E9 <rel32>  JMP cave_base
-    // 90 90       NOP NOP  (pad remaining 2 of 7 overwritten bytes)
-    let mut patch_bytes: Vec<u8> = Vec::with_capacity(OVERWRITE_SIZE);
-    patch_bytes.push(0xE9);
-    let jmp_to_cave = (cave_base as isize) - ((INJECTION_ADDR + 5) as isize);
-    patch_bytes.extend_from_slice(&(jmp_to_cave as i32).to_le_bytes());
-    patch_bytes.extend(std::iter::repeat_n(0x90, OVERWRITE_SIZE - 5));
-
-    let p = Patch::overwrite(INJECTION_ADDR, &patch_bytes);
-
-    // Leak both allocations so they live for the process lifetime
-    std::mem::forget(p);
-    std::mem::forget(mmap);
-
-    log::info!(
-        "gun_blocking: trampoline installed at {INJECTION_ADDR:#x} → cave at {cave_base:#x}"
+            Ok(code)
+        },
     );
+    let cave_base = p
+        .trampoline_address()
+        .expect("gun-blocking detour has no trampoline");
+    std::mem::forget(p);
+
+    log::info!("gun_blocking: trampoline prepared at {INJECTION_ADDR:#x} → cave at {cave_base:#x}");
 }
 
 // ---------------------------------------------------------------------------
