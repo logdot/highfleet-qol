@@ -15,6 +15,7 @@ mod logger;
 mod parts;
 mod patchy;
 mod plane;
+mod plane_guns;
 mod rng;
 mod sell_multiplier;
 mod shake;
@@ -107,6 +108,7 @@ unsafe extern "C" fn init() -> bool {
     }
 
     plane::patch_planes(&config.planes);
+    plane_guns::patch_plane_guns();
 
     if config.enable_shop_parts {
         parts::patch_custom_parts(config.shop_parts);

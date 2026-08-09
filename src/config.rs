@@ -1,9 +1,9 @@
 use std::{collections::HashMap, error::Error};
 
-use highfleet::v1_163::EscadraString;
+use highfleet::general::EscadraString;
 use serde::{de::Deserializer, Deserialize, Serialize};
 
-use crate::{plane, structs::loadout::Loadout};
+use crate::{plane, structs::loadout::ConfigLoadout};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -18,7 +18,7 @@ pub struct Config {
     pub max_zoom_level: u8,
     pub min_zoom_level: u8,
     pub zoom_levels: Vec<f32>,
-    pub planes: HashMap<EscadraString, Vec<Loadout>>,
+    pub planes: HashMap<EscadraString, Vec<ConfigLoadout>>,
     pub enable_shop_parts: bool,
     #[serde(default, deserialize_with = "deserialize_shop_parts")]
     pub shop_parts: HashMap<String, Vec<ShopPart>>,

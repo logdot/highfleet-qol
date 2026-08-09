@@ -1,12 +1,12 @@
 use serde::{Serialize, Serializer};
 
-use crate::structs::{cvec::CVec, loadout::Loadout};
+use crate::structs::{cvec::CVec, loadout::GameLoadout};
 
 #[repr(C)]
 #[derive(Debug, Default, Clone)]
 pub struct Plane {
     pub _padding: [u8; 8],
-    pub loadouts: CVec<*const Loadout>,
+    pub loadouts: CVec<*const GameLoadout>,
 }
 
 impl Serialize for Plane {
@@ -20,8 +20,8 @@ impl Serialize for Plane {
 
         state.serialize_field("_padding", &self._padding)?;
 
-        // Convert CVec<*const Loadout> to Vec<Loadout> by dereferencing the pointers
-        let loadouts_vec: Vec<&Loadout> = unsafe {
+        // Convert the pointer vector to serializable game loadouts.
+        let loadouts_vec: Vec<&GameLoadout> = unsafe {
             if self.loadouts.items.is_null() || self.loadouts.items_end.is_null() {
                 Vec::new()
             } else {
