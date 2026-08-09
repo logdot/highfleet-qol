@@ -15,7 +15,6 @@ use crate::{
 };
 
 const BUILTIN_GUN_AMMO: &str = "ITEM_GUN37";
-const GUN_RETICLE: i32 = 4;
 const MAX_AMMO_DEFINITIONS: usize = 10_000;
 
 #[cfg(feature = "1_151")]
@@ -176,18 +175,6 @@ unsafe extern "C" fn configure_plane_gun_and_override(
         return;
     };
 
-    if ammo.reticle != GUN_RETICLE {
-        log::warn!(
-            "plane_guns: ammo definition '{}' for loadout '{}' has reticle {}, not {}; using {}",
-            custom_ammo_name,
-            loadout_name,
-            ammo.reticle,
-            GUN_RETICLE,
-            BUILTIN_GUN_AMMO
-        );
-        return;
-    }
-
     if ammo.max_load <= 0 {
         log::warn!(
             "plane_guns: ammo definition '{}' for loadout '{}' has invalid gun capacity {}; using {}",
@@ -215,7 +202,6 @@ unsafe extern "C" fn configure_plane_gun_and_override(
 
 struct FoundAmmo {
     index: i32,
-    reticle: i32,
     gun_rate: f32,
     max_load: i32,
 }
@@ -258,7 +244,6 @@ unsafe fn find_ammo_definition(ammo_name: &str) -> Option<FoundAmmo> {
             };
             return Some(FoundAmmo {
                 index,
-                reticle: definition.reticle,
                 gun_rate: ammo_gun_rate(definition),
                 max_load: ammo_max_load(definition),
             });
