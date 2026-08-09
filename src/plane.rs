@@ -4,8 +4,8 @@ use highfleet::general::EscadraString;
 use serde::Serialize;
 
 use crate::{
-    config::ConfigPlane,
-    structs::{cvec::CVec, loadout, plane::Plane, tll::TllContainer},
+    config::{ConfigLoadout, ConfigPlane},
+    structs::{cvec::CVec, loadout::GameLoadout, plane::Plane, tll::TllContainer},
 };
 
 fn get_plane_tll_addr() -> u64 {
@@ -46,7 +46,7 @@ pub fn get_planes() -> HashMap<EscadraString, ConfigPlane> {
                     .loadouts
                     .items()
                     .into_iter()
-                    .map(|&ptr| loadout::ConfigLoadout::from(&*ptr))
+                    .map(|&ptr| ConfigLoadout::from(&*ptr))
                     .collect::<Vec<_>>();
                 (k.clone(), ConfigPlane::from(loadouts))
             })
@@ -63,7 +63,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
     );
 
     // Load all loadouts from config and keep the custom gun selection outside the game ABI.
-    let mut new_loadouts = TllContainer::<EscadraString, loadout::GameLoadout>::new();
+    let mut new_loadouts = TllContainer::<EscadraString, GameLoadout>::new();
     let mut gun_ammo_by_oid = HashMap::<String, Option<String>>::new();
 
     for plane in planes.values() {
@@ -82,7 +82,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
                 }
             }
 
-            new_loadouts.insert(loadout.oid.clone(), loadout::GameLoadout::from(loadout));
+            new_loadouts.insert(loadout.oid.clone(), GameLoadout::from(loadout));
         }
     }
 
@@ -106,15 +106,15 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
         for loadout in &plane_config.loadouts {
             plane
                 .loadouts
-                .insert(*new_loadout_map.get(&loadout.oid).unwrap() as *const loadout::GameLoadout);
+                .insert(*new_loadout_map.get(&loadout.oid).unwrap() as *const GameLoadout);
         }
 
         new_planes.insert(plane_name.clone(), plane);
     }
 
     // Write loadouts to game's loadout TLL
-    let loadout_tll_ptr: *mut TllContainer<EscadraString, loadout::GameLoadout> =
-        get_loadout_tll_addr() as *mut TllContainer<EscadraString, loadout::GameLoadout>;
+    let loadout_tll_ptr: *mut TllContainer<EscadraString, GameLoadout> =
+        get_loadout_tll_addr() as *mut TllContainer<EscadraString, GameLoadout>;
     std::ptr::write(loadout_tll_ptr, new_loadouts);
 
     // Write planes to game's plane TLL
