@@ -46,21 +46,38 @@ The list of toggles is:
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
 
-## Aircraft gun ammo
+## Aircraft settings
 
-A plane loadout can use `gun_ammo` to select any aircraft-gun ammo definition available when the plane launches, including definitions injected by another mod:
+Each entry in `planes` can set the aircraft's health and available loadouts. The generated configuration contains the correct internal aircraft names to edit:
 
 ```json
 {
-  "oid": "LOADOUT_T7_GUN57_K13",
-  "icon": "LOADOUT_K13",
-  "vec_parts": [
-    { "name": "ITEM_K13", "count": 2 }
-  ],
-  "launch_loadout_weight": 10,
-  "gun_ammo": "ITEM_GUN57"
+  "planes": {
+    "CRAFT_T7": {
+      "health": 45.0,
+      "loadouts": [
+        {
+          "oid": "LOADOUT_T7_GUN57_K13",
+          "icon": "LOADOUT_K13",
+          "vec_parts": [
+            { "name": "ITEM_K13", "count": 2 }
+          ],
+          "launch_loadout_weight": 10,
+          "gun_ammo": "ITEM_GUN57"
+        }
+      ]
+    }
+  }
 }
 ```
+
+`health` sets both current and maximum health whenever that aircraft launches. It must be greater than zero; missing or invalid values use the game's normal `30.0` health.
+
+Older configurations that store each plane as a loadout array are still accepted and use `30.0` health automatically.
+
+### Aircraft gun ammo
+
+A loadout can use `gun_ammo` to select any aircraft-gun ammo definition available when the plane launches, including definitions injected by another mod.
 
 Omit `gun_ammo` (or set it to `null`) for a loadout without a gun. Existing configurations using `"has_gun37mm": true` remain supported and are interpreted as `"gun_ammo": "ITEM_GUN37"`.
 

@@ -3,7 +3,10 @@ use std::{collections::HashMap, hash::Hash};
 use highfleet::general::EscadraString;
 use serde::Serialize;
 
-use crate::structs::{cvec::CVec, loadout, plane::Plane, tll::TllContainer};
+use crate::{
+    config::ConfigPlane,
+    structs::{cvec::CVec, loadout, plane::Plane, tll::TllContainer},
+};
 
 fn get_plane_tll_addr() -> u64 {
     if cfg!(feature = "1_151") {
@@ -27,7 +30,7 @@ fn get_loadout_tll_addr() -> u64 {
     }
 }
 
-pub fn get_planes() -> HashMap<EscadraString, Vec<loadout::ConfigLoadout>> {
+pub fn get_planes() -> HashMap<EscadraString, ConfigPlane> {
     let loadout_tll_addr = get_plane_tll_addr();
     let tll_container_ptr = loadout_tll_addr as *const TllContainer<EscadraString, Plane>
         as *mut TllContainer<EscadraString, Plane>;
@@ -39,26 +42,32 @@ pub fn get_planes() -> HashMap<EscadraString, Vec<loadout::ConfigLoadout>> {
             .get_map()
             .into_iter()
             .map(|(k, v)| {
-                (
-                    k.clone(),
-                    v.loadouts
-                        .items()
-                        .into_iter()
-                        .map(|&ptr| loadout::ConfigLoadout::from(&*ptr))
-                        .collect::<Vec<_>>(),
-                )
+                let loadouts = v
+                    .loadouts
+                    .items()
+                    .into_iter()
+                    .map(|&ptr| loadout::ConfigLoadout::from(&*ptr))
+                    .collect::<Vec<_>>();
+                (k.clone(), ConfigPlane::from(loadouts))
             })
             .collect()
     }
 }
 
-pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::ConfigLoadout>>) {
+pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
+    crate::plane_health::install_plane_health(
+        planes
+            .iter()
+            .map(|(plane_name, plane)| (plane_name.get_string().to_owned(), plane.health))
+            .collect(),
+    );
+
     // Load all loadouts from config and keep the custom gun selection outside the game ABI.
     let mut new_loadouts = TllContainer::<EscadraString, loadout::GameLoadout>::new();
     let mut gun_ammo_by_oid = HashMap::<String, Option<String>>::new();
 
-    for plane_loadouts in planes.values() {
-        for loadout in plane_loadouts {
+    for plane in planes.values() {
+        for loadout in &plane.loadouts {
             let oid = loadout.oid.get_string().to_owned();
             let gun_ammo = loadout
                 .gun_ammo
@@ -86,7 +95,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::ConfigLo
 
     // Load planes and set loadouts
     let mut new_planes = TllContainer::<EscadraString, Plane>::new();
-    for (plane_name, plane_loadouts) in planes.iter() {
+    for (plane_name, plane_config) in planes.iter() {
         let mut plane = Plane {
             _padding: [0; 8],
             loadouts: CVec::empty(),
@@ -94,7 +103,7 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, Vec<loadout::ConfigLo
 
         let new_loadout_map = new_loadouts.get_map();
 
-        for loadout in plane_loadouts {
+        for loadout in &plane_config.loadouts {
             plane
                 .loadouts
                 .insert(*new_loadout_map.get(&loadout.oid).unwrap() as *const loadout::GameLoadout);
