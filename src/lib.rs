@@ -6,7 +6,7 @@ use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
 
-mod config;
+pub mod config;
 mod dumpable;
 mod flare_crash;
 mod guns;

@@ -18,11 +18,11 @@ pub struct GameItemMunition {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-/// Represents an individual munition in the QOL configuration.
+/// One type of bomb, rocket, missile, or other carried item in an aircraft loadout.
 pub struct ConfigItemMunition {
-    /// Name of the item.
+    /// Internal item name used by the game, such as `ITEM_K13`.
     pub name: EscadraString,
-    /// How many of this item a plane can carry.
+    /// Number of this item carried by each aircraft.
     pub count: u32,
 }
 
@@ -40,13 +40,22 @@ pub struct GameLoadout {
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-/// Represents a loadout in the QOL configuration.
+/// A selectable collection of weapons and ammunition for an aircraft.
 pub struct ConfigLoadout {
+    /// Unique internal name for this loadout.
     pub oid: EscadraString,
+    /// Resource name of the icon shown for this loadout.
     pub icon: EscadraString,
+    /// Bombs, rockets, missiles, and other counted items carried by each aircraft.
     pub vec_parts: Vec<ConfigItemMunition>,
+    /// How likely it is for the AI to use this loadout.
+    ///
+    /// The percentage gets calculated as `weight of this loadout / total weight of all loadouts`.
     pub launch_loadout_weight: u32,
-    /// Ammo definition used by the aircraft's built-in gun.
+    /// Internal name of the ammunition used by the aircraft's built-in gun.
+    ///
+    /// For example, use `ITEM_GUN37` for the 37 mm gun or `ITEM_GUN57` for the 57 mm gun.
+    /// Leave this unset for a loadout without a gun.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gun_ammo: Option<EscadraString>,
 }
