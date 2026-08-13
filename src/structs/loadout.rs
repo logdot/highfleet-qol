@@ -1,12 +1,12 @@
 use highfleet::general::EscadraString;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::structs::cvec::CVec;
 
 #[repr(C)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Represents an individual munition on a plane
-pub struct ItemMunition {
+#[derive(Debug, Clone, Serialize)]
+/// Represents an individual munition in the game's native layout.
+pub struct GameItemMunition {
     /// Name of the item.
     pub name: EscadraString,
     /// How many of this item a plane can carry.
@@ -16,14 +16,17 @@ pub struct ItemMunition {
 }
 
 #[repr(C)]
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-/// Represents a loadout object inside a Tll
-pub struct Loadout {
+#[derive(Debug, Default, Clone, Serialize)]
+/// Represents a loadout object in the game's native TLL layout.
+pub struct GameLoadout {
     pub oid: EscadraString,
     pub icon: EscadraString,
-    pub vec_parts: CVec<ItemMunition>,
+    pub vec_parts: CVec<GameItemMunition>,
     pub launch_loadout_weight: u32,
     pub has_gun37mm: bool,
     #[serde(skip)]
     pub _padding: [u8; 3],
 }
+
+const _: () = assert!(std::mem::size_of::<GameItemMunition>() == 0x28);
+const _: () = assert!(std::mem::size_of::<GameLoadout>() == 0x60);

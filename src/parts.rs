@@ -1,10 +1,10 @@
 //! Patches the SomethingWithLevelSerias function to inject custom parts into generated shops.
 //!
-//! This module hooks after an existing DefinePart call in the weapons category section
-//! of the shop generation function, and calls DefinePart for each user-configured part string.
+//! This module hooks the weapons category's one-time shop generation path and calls
+//! DefinePart for each user-configured part string.
 //!
 //! Each part has a configurable probability of appearing and a random count in
-//! `[min_parts, max_parts]`, rolled fresh every time the shop generation runs.
+//! `[min_parts, max_parts]`, rolled when a city's shop is first generated.
 
 use std::{collections::HashMap, ffi::CString};
 
@@ -64,13 +64,13 @@ const CATEGORY_ROOT_PTR: usize = 0x143a11940;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 const CATEGORY_FALLBACK_PTR: usize = 0x147fc6f90;
 
-// Hook address: right after a DefinePart call for MDL_ANTENNA_01 in the shop generation function.
-// At 0x14029ae0f there is one instruction:
-//   MOV ECX,dword ptr [RAX + 0x2a8]   (6 bytes: 8b 88 a8 02 00 00)
-// This is 6 bytes, enough for a near jump. We save and replay it in the cave,
-// and our injected function runs after the original DefinePart call has already completed.
+// This hook must be inside the category's creation path. On 1.151, the existing-category
+// branches jump directly to the shared tail at 0x14029ae0a, bypassing shop generation.
+// At 0x140299c5c, after the new category has been initialized, there is one instruction:
+//   MOV ESI,dword ptr [RAX + 0x25c]   (6 bytes: 8b b0 5c 02 00 00)
+// Replaying it in the cave preserves the game's city-type load before injecting the parts.
 #[cfg(feature = "1_151")]
-const HOOK_ADDRESS: usize = 0x14029ae0f;
+const HOOK_ADDRESS: usize = 0x140299c5c;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 const HOOK_ADDRESS: usize = 0x1402bcd49;
 
@@ -157,9 +157,7 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) {
     // SAFETY: We only write to CUSTOM_PARTS once during init, before any reads occur.
     CUSTOM_PARTS = custom_parts;
 
-    // Hook after the existing DefinePart call.
-    // save_overwritten = true ensures the original CALL instruction executes first,
-    // then our function runs to inject the additional parts.
+    // Replay the complete overwritten instruction before injecting the additional parts.
     let p = Patch::patch_call(
         HOOK_ADDRESS,
         inject_custom_parts as *const (),
@@ -204,7 +202,7 @@ unsafe fn get_category_node() -> *const u8 {
     *(CATEGORY_FALLBACK_PTR as *const *const u8)
 }
 
-/// Called from the patch cave after the original DefinePart call.
+/// Called from the patch cave while the shop category is being populated.
 /// Iterates over all custom parts, rolls probability, picks a random count,
 /// and calls DefinePart for each part that passes the check.
 ///
