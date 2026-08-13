@@ -94,13 +94,13 @@ static REAL_CALC_ZOOM: usize = 0x14024f170;
 
 #[allow(static_mut_refs)]
 unsafe extern "C" fn calc_zoom_value() -> f32 {
-    let is_in_arcade = IS_IN_ARCADE as *const bool;
+    // let is_in_arcade = IS_IN_ARCADE as *const bool;
 
-    if !*is_in_arcade {
-        // Call original function if both booleans are false
-        let func: extern "C" fn() -> f32 = std::mem::transmute(REAL_CALC_ZOOM as *const ());
-        return func();
-    }
+    // if !*is_in_arcade {
+    //     // Call original function if both booleans are false
+    //     let func: extern "C" fn() -> f32 = std::mem::transmute(REAL_CALC_ZOOM as *const ());
+    //     return func();
+    // }
 
     let zoom_value = ZOOM_LEVEL_ADDR as *const u32;
 
