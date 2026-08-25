@@ -1,6 +1,6 @@
 use std::arch::asm;
 
-use crate::patchy::{Patch, ReturnType};
+use patchy::{Patch, ReturnType};
 
 pub unsafe fn dumpable() {
     let address;

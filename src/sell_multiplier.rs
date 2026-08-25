@@ -15,7 +15,7 @@
 
 use std::arch::naked_asm;
 
-use crate::patchy::{Patch, ReturnType};
+use patchy::{Patch, ReturnType};
 
 /// The sell price multiplier, written once at init before any patch callback fires.
 static mut SELL_MULTIPLIER: f32 = 1.0;

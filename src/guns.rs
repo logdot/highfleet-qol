@@ -1,4 +1,4 @@
-use crate::patchy::Patch;
+use patchy::Patch;
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
@@ -32,7 +32,7 @@ pub unsafe fn patch_sector_restoration() {}
 ///    function and conditionally skips firing if blocked
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 pub unsafe fn patch_sector_restoration() {
-    use crate::patchy::{relative_offset, PatchError};
+    use patchy::{relative_offset, PatchError};
 
     // FireGun addresses in v1.163
     const INJECTION_ADDR: usize = 0x140032f22;

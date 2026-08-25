@@ -8,11 +8,9 @@ use highfleet::general::EscadraString;
 use highfleet::v1_151::Ammo;
 #[cfg(not(feature = "1_151"))]
 use highfleet::v1_163::Ammo;
+use patchy::{Patch, ReturnType};
 
-use crate::{
-    patchy::{Patch, ReturnType},
-    structs::aircraft_logic::AircraftLogic,
-};
+use crate::structs::aircraft_logic::AircraftLogic;
 
 const BUILTIN_GUN_AMMO: &str = "ITEM_GUN37";
 const MAX_AMMO_DEFINITIONS: usize = 10_000;

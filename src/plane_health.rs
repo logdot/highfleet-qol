@@ -2,11 +2,9 @@
 
 use std::{arch::naked_asm, collections::HashMap, slice, sync::OnceLock};
 
-use crate::{
-    config::DEFAULT_PLANE_HEALTH,
-    patchy::{Patch, ReturnType},
-    structs::aircraft_body::AircraftBody,
-};
+use patchy::{Patch, ReturnType};
+
+use crate::{config::DEFAULT_PLANE_HEALTH, structs::aircraft_body::AircraftBody};
 
 const ORIGINAL_BYTES: [u8; 6] = [0x8b, 0x8e, 0x88, 0x01, 0x00, 0x00];
 

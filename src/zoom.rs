@@ -1,4 +1,4 @@
-use crate::patchy::{Patch, ReturnType};
+use patchy::{Patch, ReturnType};
 
 static mut MIN_ZOOM: u32 = 3;
 static mut MAX_ZOOM: u32 = 3;

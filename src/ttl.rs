@@ -1,4 +1,4 @@
-use crate::patchy::Patch;
+use patchy::Patch;
 
 pub unsafe fn patch_ttl() {
     let address;

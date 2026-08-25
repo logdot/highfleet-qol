@@ -4,7 +4,7 @@ use std::slice;
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
-use crate::patchy::Patch;
+use patchy::Patch;
 
 const HOOK_RVA: usize = 0x36bb5;
 const NON_NULL_RESUME_RVA: usize = 0x36bbb;

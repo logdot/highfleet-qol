@@ -8,11 +8,9 @@
 
 use std::{collections::HashMap, ffi::CString};
 
-use crate::{
-    config::ShopPart,
-    patchy::{Patch, ReturnType},
-    rng,
-};
+use patchy::{Patch, ReturnType};
+
+use crate::{config::ShopPart, rng};
 
 /// Stored representation of a custom part with its RNG parameters.
 struct CustomPart {

@@ -13,7 +13,6 @@ mod guns;
 #[cfg(debug_assertions)]
 mod logger;
 mod parts;
-mod patchy;
 mod plane;
 mod plane_guns;
 mod plane_health;
