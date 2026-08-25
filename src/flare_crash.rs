@@ -2,9 +2,7 @@
 
 use std::slice;
 
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-
-use patchy::Patch;
+use patchy::{Patch, PatchError, ProcessModule, Trampoline};
 
 const HOOK_RVA: usize = 0x36bb5;
 const NON_NULL_RESUME_RVA: usize = 0x36bbb;
@@ -14,14 +12,20 @@ const ORIGINAL_BYTES: [u8; 6] = [0x48, 0x8b, 0xd8, 0x48, 0x8b, 0xce];
 /// Installs the nullable missile-fuze link check required by HighFleet 1.163.
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 pub unsafe fn patch_flare_crash() {
-    let module_base = match GetModuleHandleW(None) {
-        Ok(module) => module.0 as usize,
+    let module = match ProcessModule::main() {
+        Ok(module) => module,
         Err(error) => {
             log::error!("flare_crash_fix: unable to locate the game executable: {error}");
             return;
         }
     };
-    let hook_address = module_base + HOOK_RVA;
+    let hook_address = match module.resolve_rva(HOOK_RVA) {
+        Ok(address) => address,
+        Err(error) => {
+            log::error!("flare_crash_fix: unable to resolve hook address: {error}");
+            return;
+        }
+    };
     let found_bytes = slice::from_raw_parts(hook_address as *const u8, ORIGINAL_BYTES.len());
 
     if found_bytes != ORIGINAL_BYTES {
@@ -33,9 +37,14 @@ pub unsafe fn patch_flare_crash() {
         return;
     }
 
-    let trampoline = build_trampoline(module_base);
-    let patch = Patch::detour(hook_address, ORIGINAL_BYTES.len(), &trampoline);
-    std::mem::forget(patch);
+    let trampoline = match build_trampoline(module) {
+        Ok(trampoline) => trampoline,
+        Err(error) => {
+            log::error!("flare_crash_fix: unable to build trampoline: {error}");
+            return;
+        }
+    };
+    Patch::detour_trampoline(hook_address, ORIGINAL_BYTES.len(), trampoline);
 
     log::info!("Flare crash fix enabled");
 }
@@ -46,24 +55,20 @@ pub unsafe fn patch_flare_crash() {
     log::info!("Flare crash fix is not required on HighFleet 1.151");
 }
 
-fn build_trampoline(module_base: usize) -> Vec<u8> {
-    let mut trampoline = Vec::with_capacity(39);
+fn build_trampoline(module: ProcessModule) -> Result<Trampoline, PatchError> {
+    let mut trampoline = Trampoline::new();
+    let non_null = trampoline.new_label();
 
-    // TEST RAX, RAX; JNZ non_null (skip the 14-byte absolute null jump).
-    trampoline.extend_from_slice(&[0x48, 0x85, 0xc0, 0x75, 0x0e]);
-    push_absolute_jump(&mut trampoline, module_base + NULL_EXIT_RVA);
+    trampoline.bytes(&[0x48, 0x85, 0xc0]); // TEST RAX, RAX
+    trampoline.jump_if_not_zero(non_null);
+    trampoline.absolute_jump(module.resolve_rva(NULL_EXIT_RVA)?);
 
     // Replay the instructions overwritten at the hook point.
-    trampoline.extend_from_slice(&ORIGINAL_BYTES);
-    push_absolute_jump(&mut trampoline, module_base + NON_NULL_RESUME_RVA);
+    trampoline.bind(non_null)?;
+    trampoline.bytes(&ORIGINAL_BYTES);
+    trampoline.absolute_jump(module.resolve_rva(NON_NULL_RESUME_RVA)?);
 
-    trampoline
-}
-
-fn push_absolute_jump(code: &mut Vec<u8>, destination: usize) {
-    // JMP qword ptr [RIP]; the destination pointer immediately follows.
-    code.extend_from_slice(&[0xff, 0x25, 0x00, 0x00, 0x00, 0x00]);
-    code.extend_from_slice(&destination.to_le_bytes());
+    Ok(trampoline)
 }
 
 #[cfg(test)]
@@ -73,18 +78,20 @@ mod tests {
     #[test]
     fn trampoline_branches_to_the_expected_runtime_addresses() {
         let module_base = 0x140000000;
-        let trampoline = build_trampoline(module_base);
+        let trampoline = build_trampoline(ProcessModule::from_base(module_base)).unwrap();
+        let trampoline = trampoline.build(0x180000000).unwrap();
 
-        assert_eq!(&trampoline[..5], &[0x48, 0x85, 0xc0, 0x75, 0x0e]);
+        assert_eq!(&trampoline[..3], &[0x48, 0x85, 0xc0]);
+        assert_eq!(&trampoline[3..9], &[0x0f, 0x85, 0x0e, 0x00, 0x00, 0x00]);
         assert_eq!(
-            usize::from_le_bytes(trampoline[11..19].try_into().unwrap()),
+            usize::from_le_bytes(trampoline[15..23].try_into().unwrap()),
             module_base + NULL_EXIT_RVA
         );
-        assert_eq!(&trampoline[19..25], &ORIGINAL_BYTES);
+        assert_eq!(&trampoline[23..29], &ORIGINAL_BYTES);
         assert_eq!(
-            usize::from_le_bytes(trampoline[31..39].try_into().unwrap()),
+            usize::from_le_bytes(trampoline[35..43].try_into().unwrap()),
             module_base + NON_NULL_RESUME_RVA
         );
-        assert_eq!(trampoline.len(), 39);
+        assert_eq!(trampoline.len(), 43);
     }
 }

@@ -17,10 +17,3 @@ serde_json = "1.0.144"
 highfleet = { git = "https://github.com/logdot/highfleet-rs.git" }
 libc = "0.2.177"
 patchy = { package = "patchy-rs", path = "../patchy-rs" }
-
-[dependencies.windows]
-version = "0.*"
-features = [
-    "Win32_Foundation",
-    "Win32_System_LibraryLoader",
-]

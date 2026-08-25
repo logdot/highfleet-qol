@@ -1,4 +1,4 @@
-use patchy::Patch;
+use patchy::{Patch, Trampoline};
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
@@ -8,8 +8,7 @@ pub unsafe fn patch_sector_blocking() {
     let size: usize = 6;
 
     let data = vec![0x90; size]; // NOP instructions
-    let p = Patch::overwrite(address, &data);
-    std::mem::forget(p);
+    Patch::overwrite(address, &data);
 }
 
 /// Gun blocking is already absent in v1.163, so "unblocking" is a no-op.
@@ -32,15 +31,14 @@ pub unsafe fn patch_sector_restoration() {}
 ///    function and conditionally skips firing if blocked
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 pub unsafe fn patch_sector_restoration() {
-    use patchy::{relative_offset, PatchError};
-
     // FireGun addresses in v1.163
     const INJECTION_ADDR: usize = 0x140032f22;
     const EXIT_0_ADDR: usize = 0x140032ef0;
     const RETURN_ADDR: usize = 0x140032f29;
-    const OVERWRITE_SIZE: usize = 7; // SUBSS XMM1,XMM7 (4) + COMISS XMM6,XMM1 (3)
-
-    let fn_ptr = is_gun_blocked as *const () as usize;
+    const ORIGINAL_BYTES: [u8; 7] = [
+        0xF3, 0x0F, 0x5C, 0xCF, // SUBSS XMM1, XMM7
+        0x0F, 0x2F, 0xF1, // COMISS XMM6, XMM1
+    ];
 
     // --- Build the code cave trampoline ---
     //
@@ -52,74 +50,28 @@ pub unsafe fn patch_sector_restoration() {
     //   RSP  ≡ 0 mod 16
     //
     // Trampoline logic:
-    //   save XMM1 + shadow space
+    //   save all volatile Windows-x64 registers
     //   call is_gun_blocked(RDI)
-    //   restore XMM1
+    //   restore all volatile registers
     //   if blocked → JMP EXIT_0 (0x140032ef0)
     //   else       → replay overwritten instructions, JMP 0x140032f29
-    let mut cave: Vec<u8> = Vec::with_capacity(64);
-
-    // SUB RSP, 0x30  (0x10 XMM1 save + 0x20 shadow space)
-    cave.extend_from_slice(&[0x48, 0x83, 0xEC, 0x30]);
-    // MOVDQU [RSP+0x20], XMM1
-    cave.extend_from_slice(&[0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x20]);
-    // MOV RCX, RDI
-    cave.extend_from_slice(&[0x48, 0x89, 0xF9]);
-    // FF 15 02 00 00 00   CALL [RIP+2]
-    // EB 08               JMP +8  (skip over 8-byte pointer)
-    // <8 bytes>           absolute function pointer
-    cave.extend_from_slice(&[0xFF, 0x15, 0x02, 0x00, 0x00, 0x00]);
-    cave.extend_from_slice(&[0xEB, 0x08]);
-    cave.extend_from_slice(&fn_ptr.to_le_bytes());
-    // MOVDQU XMM1, [RSP+0x20]
-    cave.extend_from_slice(&[0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x20]);
-    // ADD RSP, 0x30
-    cave.extend_from_slice(&[0x48, 0x83, 0xC4, 0x30]);
-    // TEST AL, AL
-    cave.extend_from_slice(&[0x84, 0xC0]);
-    // JNZ blocked  (forward jump over 4+3+5 = 12 bytes)
-    cave.extend_from_slice(&[0x75, 0x0C]);
-
-    // --- Not blocked: replay overwritten instructions ---
-    // SUBSS XMM1, XMM7
-    cave.extend_from_slice(&[0xF3, 0x0F, 0x5C, 0xCF]);
-    // COMISS XMM6, XMM1
-    cave.extend_from_slice(&[0x0F, 0x2F, 0xF1]);
-    // JMP rel32 → RETURN_ADDR (placeholder, fixed up below)
-    let jmp_back_off = cave.len();
-    cave.extend_from_slice(&[0xE9, 0x00, 0x00, 0x00, 0x00]);
-
-    // --- Blocked: jump to EXIT_0 ---
-    let jmp_exit_off = cave.len();
-    cave.extend_from_slice(&[0xE9, 0x00, 0x00, 0x00, 0x00]);
-
-    let trampoline_size = cave.len();
-    let p = Patch::detour_with(
-        INJECTION_ADDR,
-        OVERWRITE_SIZE,
-        trampoline_size,
-        move |cave_base| {
-            let mut code = cave.clone();
-
-            let src_back = cave_base
-                .checked_add(jmp_back_off + 5)
-                .ok_or(PatchError::AddressOverflow)?;
-            let rel_back = relative_offset(src_back, RETURN_ADDR)?;
-            code[jmp_back_off + 1..jmp_back_off + 5].copy_from_slice(&rel_back.to_le_bytes());
-
-            let src_exit = cave_base
-                .checked_add(jmp_exit_off + 5)
-                .ok_or(PatchError::AddressOverflow)?;
-            let rel_exit = relative_offset(src_exit, EXIT_0_ADDR)?;
-            code[jmp_exit_off + 1..jmp_exit_off + 5].copy_from_slice(&rel_exit.to_le_bytes());
-
-            Ok(code)
-        },
+    let mut cave = Trampoline::new();
+    let blocked = cave.new_label();
+    cave.preserved_predicate_call(
+        is_gun_blocked as *const (),
+        &[0x48, 0x89, 0xF9], // MOV RCX, RDI
+        blocked,
     );
+    cave.bytes(&ORIGINAL_BYTES);
+    cave.relative_jump(RETURN_ADDR);
+    cave.bind(blocked)
+        .expect("gun-blocking trampoline label was bound twice");
+    cave.relative_jump(EXIT_0_ADDR);
+
+    let p = Patch::detour_trampoline(INJECTION_ADDR, ORIGINAL_BYTES.len(), cave);
     let cave_base = p
         .trampoline_address()
         .expect("gun-blocking detour has no trampoline");
-    std::mem::forget(p);
 
     log::info!("gun_blocking: trampoline prepared at {INJECTION_ADDR:#x} → cave at {cave_base:#x}");
 }
