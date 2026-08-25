@@ -1,8 +1,8 @@
 use std::arch::asm;
 
-use patchy::{Patch, ReturnType};
+use patchy::{Patch, Result, ReturnType};
 
-pub unsafe fn dumpable() {
+pub unsafe fn dumpable() -> Result {
     let address;
     if cfg!(feature = "1_151") {
         address = 0x1400240c0;
@@ -13,14 +13,14 @@ pub unsafe fn dumpable() {
         address = 0x1400256e0;
     }
 
-    let p = Patch::patch_call(
+    Patch::patch_call(
         address,
         set_dumpable as *const (),
         6,
         true,
         ReturnType::None,
-    );
-    std::mem::forget(p);
+    )?;
+    Ok(())
 }
 
 #[no_mangle]

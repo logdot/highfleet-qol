@@ -2,7 +2,7 @@
 
 use std::slice;
 
-use patchy::{Condition, Patch, PatchError, ProcessModule, Trampoline};
+use patchy::{Condition, Patch, PatchError, ProcessModule, Result, Trampoline};
 
 const HOOK_RVA: usize = 0x36bb5;
 const NON_NULL_RESUME_RVA: usize = 0x36bbb;
@@ -11,51 +11,32 @@ const ORIGINAL_BYTES: [u8; 6] = [0x48, 0x8b, 0xd8, 0x48, 0x8b, 0xce];
 
 /// Installs the nullable missile-fuze link check required by HighFleet 1.163.
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-pub unsafe fn patch_flare_crash() {
-    let module = match ProcessModule::main() {
-        Ok(module) => module,
-        Err(error) => {
-            log::error!("flare_crash_fix: unable to locate the game executable: {error}");
-            return;
-        }
-    };
-    let hook_address = match module.resolve_rva(HOOK_RVA) {
-        Ok(address) => address,
-        Err(error) => {
-            log::error!("flare_crash_fix: unable to resolve hook address: {error}");
-            return;
-        }
-    };
+pub unsafe fn patch_flare_crash() -> Result {
+    let module = ProcessModule::main()?;
+    let hook_address = module.resolve_rva(HOOK_RVA)?;
     let found_bytes = slice::from_raw_parts(hook_address as *const u8, ORIGINAL_BYTES.len());
 
     if found_bytes != ORIGINAL_BYTES {
-        log::error!(
-            "flare_crash_fix: unexpected bytes at {hook_address:#x}; expected {:02x?}, found {:02x?}",
-            ORIGINAL_BYTES,
-            found_bytes
-        );
-        return;
+        return Err(PatchError::SourceChanged {
+            address: hook_address,
+        });
     }
 
-    let trampoline = match build_trampoline(module) {
-        Ok(trampoline) => trampoline,
-        Err(error) => {
-            log::error!("flare_crash_fix: unable to build trampoline: {error}");
-            return;
-        }
-    };
-    Patch::detour_trampoline(hook_address, ORIGINAL_BYTES.len(), trampoline);
+    let trampoline = build_trampoline(module)?;
+    Patch::detour_trampoline(hook_address, ORIGINAL_BYTES.len(), trampoline)?;
 
     log::info!("Flare crash fix enabled");
+    Ok(())
 }
 
 /// Reports that the 1.163-only fix is unnecessary on HighFleet 1.151.
 #[cfg(feature = "1_151")]
-pub unsafe fn patch_flare_crash() {
+pub unsafe fn patch_flare_crash() -> Result {
     log::info!("Flare crash fix is not required on HighFleet 1.151");
+    Ok(())
 }
 
-fn build_trampoline(module: ProcessModule) -> Result<Trampoline, PatchError> {
+fn build_trampoline(module: ProcessModule) -> Result<Trampoline> {
     let mut trampoline = Trampoline::new();
     let non_null = trampoline.new_label();
 

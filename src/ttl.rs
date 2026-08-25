@@ -1,6 +1,6 @@
-use patchy::Patch;
+use patchy::{Patch, Result};
 
-pub unsafe fn patch_ttl() {
+pub unsafe fn patch_ttl() -> Result {
     let address;
     if cfg!(feature = "1_151") {
         address = 0x140050372;
@@ -12,6 +12,6 @@ pub unsafe fn patch_ttl() {
     }
 
     let data = [0x90u8; 4]; // NOP instructions
-    let p = Patch::overwrite(address, &data);
-    std::mem::forget(p);
+    Patch::overwrite(address, &data)?;
+    Ok(())
 }

@@ -8,7 +8,7 @@
 
 use std::{collections::HashMap, ffi::CString};
 
-use patchy::{Patch, ReturnType};
+use patchy::{Patch, Result, ReturnType};
 
 use crate::{config::ShopPart, rng};
 
@@ -82,15 +82,15 @@ const HOOK_ADDRESS: usize = 0x1402bcd49;
 /// # Safety
 /// Must be called while the game process memory is accessible and before the shop
 /// generation function runs.
-pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) {
+pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) -> Result {
     if parts.is_empty() {
         log::info!("No custom parts to inject, skipping patch.");
-        return;
+        return Ok(());
     }
 
     if HOOK_ADDRESS == 0x0 {
         log::warn!("Custom parts patching is not supported on this game version.");
-        return;
+        return Ok(());
     }
 
     // Convert to CustomPart structs with stable CString pointers.
@@ -141,7 +141,7 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) {
 
     if custom_parts.is_empty() {
         log::warn!("All custom part strings were invalid, skipping patch.");
-        return;
+        return Ok(());
     }
 
     log::info!(
@@ -156,14 +156,14 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) {
     CUSTOM_PARTS = custom_parts;
 
     // Replay the complete overwritten instruction before injecting the additional parts.
-    let p = Patch::patch_call(
+    Patch::patch_call(
         HOOK_ADDRESS,
         inject_custom_parts as *const (),
         6,
         true,
         ReturnType::None,
-    );
-    std::mem::forget(p);
+    )?;
+    Ok(())
 }
 
 /// Reads the current city type from the city object.

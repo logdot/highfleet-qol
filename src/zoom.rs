@@ -1,4 +1,4 @@
-use patchy::{Patch, ReturnType};
+use patchy::{Patch, Result, ReturnType};
 
 static mut MIN_ZOOM: u32 = 3;
 static mut MAX_ZOOM: u32 = 3;
@@ -18,7 +18,7 @@ static MAX_ZOOM_ADDR: usize = 0x1403c11d0;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 static ZOOM_LEVEL_ADDR: usize = 0x1403c11cc;
 
-pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
+pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) -> Result {
     MAX_ZOOM = max_zoom;
     MIN_ZOOM = min_zoom;
 
@@ -38,17 +38,17 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) {
         override_count = 20;
     }
 
-    let p = Patch::patch_call(
+    Patch::patch_call(
         address,
         set_zoom_level as *const (),
         override_count,
         false,
         ReturnType::None,
-    );
-    std::mem::forget(p);
+    )?;
+    Ok(())
 }
 
-pub unsafe fn patch_levels(zoom_levels: Vec<f32>) {
+pub unsafe fn patch_levels(zoom_levels: Vec<f32>) -> Result {
     ZOOM_LEVELS = zoom_levels;
 
     let address;
@@ -61,14 +61,14 @@ pub unsafe fn patch_levels(zoom_levels: Vec<f32>) {
         address = 0x14026b03f;
     }
 
-    let p = Patch::patch_call(
+    Patch::patch_call(
         address,
         calc_zoom_value as *const (),
         5,
         false,
         ReturnType::Xmm0,
-    );
-    std::mem::forget(p);
+    )?;
+    Ok(())
 }
 
 unsafe extern "C" fn set_zoom_level() {

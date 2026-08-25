@@ -51,21 +51,33 @@ unsafe extern "C" fn init() -> bool {
         }
     };
 
+    macro_rules! prepare_patch {
+        ($operation:expr) => {
+            if let Err(error) = $operation {
+                log::error!("Unable to prepare patches: {error}");
+                return false;
+            }
+        };
+    }
+
     if config.enable_flare_crash_fix {
-        flare_crash::patch_flare_crash();
+        prepare_patch!(flare_crash::patch_flare_crash());
     } else {
         log::info!("Flare crash fix disabled");
     }
 
     if config.enable_anti_wobble {
-        dumpable::dumpable();
+        prepare_patch!(dumpable::dumpable());
         log::info!("Anti-wobble enabled");
     } else {
         log::info!("Anti-wobble disabled");
     }
 
     if config.enable_arcade_zoom {
-        zoom::patch_zoom(config.min_zoom_level as u32, config.max_zoom_level as u32);
+        prepare_patch!(zoom::patch_zoom(
+            config.min_zoom_level as u32,
+            config.max_zoom_level as u32
+        ));
         log::info!(
             "Arcade zoom enabled (min zoom level {}, max zoom level {})",
             config.min_zoom_level,
@@ -80,45 +92,47 @@ unsafe extern "C" fn init() -> bool {
             log::warn!("You have specified more max zoom levels than you have zoom levels. This may cause instability.");
         }
 
-        zoom::patch_levels(config.zoom_levels);
+        prepare_patch!(zoom::patch_levels(config.zoom_levels));
     } else {
         log::info!("Arcade zoom disabled");
     }
 
     if config.enable_unblocked_guns {
-        guns::patch_sector_blocking();
+        prepare_patch!(guns::patch_sector_blocking());
         log::info!("Unblocked guns enabled");
     } else {
-        guns::patch_sector_restoration();
+        prepare_patch!(guns::patch_sector_restoration());
         log::info!("Gun blocking enabled");
     }
 
     if config.enable_reduced_shake {
-        shake::patch_shake();
+        prepare_patch!(shake::patch_shake());
         log::info!("Reduced shake enabled");
     } else {
         log::info!("Reduced shake disabled");
     }
 
     if config.enable_unblocked_ttl {
-        ttl::patch_ttl();
+        prepare_patch!(ttl::patch_ttl());
         log::info!("Unblocked TTL enabled");
     } else {
         log::info!("Unblocked TTL disabled");
     }
 
     plane::patch_planes(&config.planes);
-    plane_guns::patch_plane_guns();
-    plane_health::patch_plane_health();
+    prepare_patch!(plane_guns::patch_plane_guns());
+    prepare_patch!(plane_health::patch_plane_health());
 
     if config.enable_shop_parts {
-        parts::patch_custom_parts(config.shop_parts);
+        prepare_patch!(parts::patch_custom_parts(config.shop_parts));
         log::info!("Custom parts enabled");
     } else {
         log::info!("Custom parts disabled");
     }
 
-    sell_multiplier::patch_sell_multiplier(config.sell_multiplier);
+    prepare_patch!(sell_multiplier::patch_sell_multiplier(
+        config.sell_multiplier
+    ));
 
     if let Err(error) = patchy::finalize_patches() {
         log::error!("Unable to install prepared patches: {error}");

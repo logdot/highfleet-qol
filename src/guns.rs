@@ -1,23 +1,28 @@
-use patchy::{Condition, Patch, ReturnType, Trampoline};
+use patchy::{Condition, Patch, Result, ReturnType, Trampoline};
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
 #[cfg(feature = "1_151")]
-pub unsafe fn patch_sector_blocking() {
+pub unsafe fn patch_sector_blocking() -> Result {
     let address: usize = 0x14003314d;
     let size: usize = 6;
 
     let data = vec![0x90; size]; // NOP instructions
-    Patch::overwrite(address, &data);
+    Patch::overwrite(address, &data)?;
+    Ok(())
 }
 
 /// Gun blocking is already absent in v1.163, so "unblocking" is a no-op.
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-pub unsafe fn patch_sector_blocking() {}
+pub unsafe fn patch_sector_blocking() -> Result {
+    Ok(())
+}
 
 /// In v1.151, gun blocking is native — nothing to restore.
 #[cfg(feature = "1_151")]
-pub unsafe fn patch_sector_restoration() {}
+pub unsafe fn patch_sector_restoration() -> Result {
+    Ok(())
+}
 
 /// Restores the gun-blocking sector check into v1.163's FireGun function.
 ///
@@ -30,7 +35,7 @@ pub unsafe fn patch_sector_restoration() {}
 /// 3. Injecting a trampoline at the charge-decrement point that calls the Rust
 ///    function and conditionally skips firing if blocked
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-pub unsafe fn patch_sector_restoration() {
+pub unsafe fn patch_sector_restoration() -> Result {
     // FireGun addresses in v1.163
     const INJECTION_ADDR: usize = 0x140032f22;
     const EXIT_0_ADDR: usize = 0x140032ef0;
@@ -70,12 +75,13 @@ pub unsafe fn patch_sector_restoration() {
         .expect("gun-blocking trampoline label was bound twice");
     cave.relative_jump(EXIT_0_ADDR);
 
-    let p = Patch::detour_trampoline(INJECTION_ADDR, ORIGINAL_BYTES.len(), cave);
+    let p = Patch::detour_trampoline(INJECTION_ADDR, ORIGINAL_BYTES.len(), cave)?;
     let cave_base = p
         .trampoline_address()
         .expect("gun-blocking detour has no trampoline");
 
     log::info!("gun_blocking: trampoline prepared at {INJECTION_ADDR:#x} → cave at {cave_base:#x}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

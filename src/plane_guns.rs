@@ -8,7 +8,7 @@ use highfleet::general::EscadraString;
 use highfleet::v1_151::Ammo;
 #[cfg(not(feature = "1_151"))]
 use highfleet::v1_163::Ammo;
-use patchy::{Patch, ReturnType};
+use patchy::{Patch, Result, ReturnType};
 
 use crate::structs::aircraft_logic::AircraftLogic;
 
@@ -72,10 +72,10 @@ pub(crate) fn install_loadout_guns(loadout_guns: HashMap<String, String>) {
 }
 
 /// Prepares hooks for the game's hardcoded built-in aircraft-gun calls.
-pub unsafe fn patch_plane_guns() {
+pub unsafe fn patch_plane_guns() -> Result {
     let Some(loadout_guns) = LOADOUT_GUNS.get() else {
         log::error!("plane_guns: loadout gun definitions were not initialized");
-        return;
+        return Ok(());
     };
 
     if !loadout_guns
@@ -83,7 +83,7 @@ pub unsafe fn patch_plane_guns() {
         .any(|ammo_name| ammo_name != BUILTIN_GUN_AMMO)
     {
         log::info!("No custom aircraft gun ammo configured, skipping patch.");
-        return;
+        return Ok(());
     }
 
     let mut valid = true;
@@ -105,21 +105,21 @@ pub unsafe fn patch_plane_guns() {
 
     if !valid {
         log::error!("plane_guns: no hooks were prepared");
-        return;
+        return Ok(());
     }
 
     for call_site in CALL_SITES {
-        let patch = Patch::patch_call(
+        Patch::patch_call(
             call_site.address,
             configure_plane_gun_bridge as *const (),
             call_site.expected_bytes.len(),
             false,
             ReturnType::None,
-        );
-        std::mem::forget(patch);
+        )?;
     }
 
     log::info!("Prepared {} custom aircraft-gun hook(s)", CALL_SITES.len());
+    Ok(())
 }
 
 /// At each patched call site RSI contains the aircraft Body, while RCX and RDX
