@@ -2,7 +2,7 @@
 
 use std::slice;
 
-use patchy::{Patch, PatchError, ProcessModule, Trampoline};
+use patchy::{Condition, Patch, PatchError, ProcessModule, Trampoline};
 
 const HOOK_RVA: usize = 0x36bb5;
 const NON_NULL_RESUME_RVA: usize = 0x36bbb;
@@ -60,7 +60,7 @@ fn build_trampoline(module: ProcessModule) -> Result<Trampoline, PatchError> {
     let non_null = trampoline.new_label();
 
     trampoline.bytes(&[0x48, 0x85, 0xc0]); // TEST RAX, RAX
-    trampoline.jump_if_not_zero(non_null);
+    trampoline.jump_if(Condition::NotEqual, non_null);
     trampoline.absolute_jump(module.resolve_rva(NULL_EXIT_RVA)?);
 
     // Replay the instructions overwritten at the hook point.

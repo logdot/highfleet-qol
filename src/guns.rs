@@ -1,4 +1,4 @@
-use patchy::{Patch, ReturnType, Trampoline};
+use patchy::{Condition, Patch, ReturnType, Trampoline};
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
@@ -63,7 +63,7 @@ pub unsafe fn patch_sector_restoration() {
         &[0x84, 0xC0],       // TEST AL, AL
         ReturnType::None,
     );
-    cave.jump_if_not_zero(blocked);
+    cave.jump_if(Condition::NotEqual, blocked);
     cave.bytes(&ORIGINAL_BYTES);
     cave.relative_jump(RETURN_ADDR);
     cave.bind(blocked)
