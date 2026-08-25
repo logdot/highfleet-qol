@@ -2,11 +2,9 @@
 
 use std::{arch::naked_asm, collections::HashMap, slice, sync::OnceLock};
 
-use crate::{
-    config::DEFAULT_PLANE_HEALTH,
-    patchy::{Patch, ReturnType},
-    structs::aircraft_body::AircraftBody,
-};
+use patchy::{PatchSession, Result, ReturnType};
+
+use crate::{config::DEFAULT_PLANE_HEALTH, structs::aircraft_body::AircraftBody};
 
 const ORIGINAL_BYTES: [u8; 6] = [0x8b, 0x8e, 0x88, 0x01, 0x00, 0x00];
 
@@ -39,15 +37,15 @@ pub(crate) fn install_plane_health(configured_health: HashMap<String, f32>) {
 }
 
 /// Prepares the aircraft-health hook when at least one custom value is configured.
-pub unsafe fn patch_plane_health() {
+pub unsafe fn patch_plane_health(session: &mut PatchSession) -> Result {
     let Some(health_overrides) = PLANE_HEALTH.get() else {
         log::error!("plane_health: plane health definitions were not initialized");
-        return;
+        return Ok(());
     };
 
     if health_overrides.is_empty() {
         log::info!("No custom aircraft health configured, skipping patch.");
-        return;
+        return Ok(());
     }
 
     let found_bytes = slice::from_raw_parts(HOOK_ADDRESS as *const u8, ORIGINAL_BYTES.len());
@@ -57,19 +55,19 @@ pub unsafe fn patch_plane_health() {
             ORIGINAL_BYTES,
             found_bytes
         );
-        return;
+        return Ok(());
     }
 
-    let patch = Patch::patch_call(
+    session.patch_call(
         HOOK_ADDRESS,
         apply_plane_health_bridge as *const (),
         ORIGINAL_BYTES.len(),
         true,
         ReturnType::None,
-    );
-    std::mem::forget(patch);
+    )?;
 
     log::info!("Prepared custom aircraft-health hook at {HOOK_ADDRESS:#x}");
+    Ok(())
 }
 
 /// At the hook site RSI contains the aircraft body. The overwritten instruction is

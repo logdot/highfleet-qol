@@ -1,6 +1,6 @@
-use crate::patchy::Patch;
+use patchy::{PatchSession, Result};
 
-pub unsafe fn patch_shake() {
+pub unsafe fn patch_shake(session: &mut PatchSession) -> Result {
     let address;
     if cfg!(feature = "1_151") {
         address = 0x1403285e0;
@@ -14,6 +14,6 @@ pub unsafe fn patch_shake() {
     // Hex representation of float 1.0
     let data = [0x00, 0x00, 0x80, 0x3F];
 
-    let p = Patch::overwrite(address, &data);
-    std::mem::forget(p);
+    session.overwrite(address, &data)?;
+    Ok(())
 }
