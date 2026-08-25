@@ -1,4 +1,4 @@
-use patchy::{Patch, Trampoline};
+use patchy::{Patch, ReturnType, Trampoline};
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
@@ -57,10 +57,11 @@ pub unsafe fn patch_sector_restoration() {
     //   else       → replay overwritten instructions, JMP 0x140032f29
     let mut cave = Trampoline::new();
     let blocked = cave.new_label();
-    cave.preserved_call_and_compare_al(
+    cave.preserved_call(
         is_gun_blocked as *const (),
         &[0x48, 0x89, 0xF9], // MOV RCX, RDI
-        0,
+        &[0x84, 0xC0],       // TEST AL, AL
+        ReturnType::None,
     );
     cave.jump_if_not_zero(blocked);
     cave.bytes(&ORIGINAL_BYTES);
