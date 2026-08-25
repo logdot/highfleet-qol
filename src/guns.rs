@@ -57,11 +57,12 @@ pub unsafe fn patch_sector_restoration() {
     //   else       → replay overwritten instructions, JMP 0x140032f29
     let mut cave = Trampoline::new();
     let blocked = cave.new_label();
-    cave.preserved_predicate_call(
+    cave.preserved_call_and_compare_al(
         is_gun_blocked as *const (),
         &[0x48, 0x89, 0xF9], // MOV RCX, RDI
-        blocked,
+        0,
     );
+    cave.jump_if_not_zero(blocked);
     cave.bytes(&ORIGINAL_BYTES);
     cave.relative_jump(RETURN_ADDR);
     cave.bind(blocked)
