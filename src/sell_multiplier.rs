@@ -15,7 +15,7 @@
 
 use std::arch::naked_asm;
 
-use patchy::{Patch, Result, ReturnType};
+use patchy::{PatchSession, Result, ReturnType};
 
 /// The sell price multiplier, written once at init before any patch callback fires.
 static mut SELL_MULTIPLIER: f32 = 1.0;
@@ -37,8 +37,8 @@ const PATCH_ADDRESS: usize = 0x140221a3f;
 /// Size of the overwritten instruction (6 bytes in both versions).
 const PATCH_SIZE: usize = 6;
 
-/// Installs the sell-multiplier patch if the multiplier differs from 1.0.
-pub unsafe fn patch_sell_multiplier(multiplier: f32) -> Result {
+/// Prepares the sell-multiplier patch if the multiplier differs from 1.0.
+pub unsafe fn patch_sell_multiplier(session: &mut PatchSession, multiplier: f32) -> Result {
     if (multiplier - 1.0).abs() < f32::EPSILON {
         log::info!("Sell multiplier is 1.0, skipping patch.");
         return Ok(());
@@ -51,7 +51,7 @@ pub unsafe fn patch_sell_multiplier(multiplier: f32) -> Result {
 
     SELL_MULTIPLIER = multiplier;
 
-    Patch::patch_call(
+    session.patch_call(
         PATCH_ADDRESS,
         trampoline as *const (),
         PATCH_SIZE,
@@ -60,7 +60,7 @@ pub unsafe fn patch_sell_multiplier(multiplier: f32) -> Result {
     )?;
 
     log::info!(
-        "Sell multiplier patch installed at {PATCH_ADDRESS:#x} (multiplier: {multiplier:.2}x)"
+        "Sell multiplier patch prepared at {PATCH_ADDRESS:#x} (multiplier: {multiplier:.2}x)"
     );
     Ok(())
 }

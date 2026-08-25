@@ -2,7 +2,7 @@
 
 use std::{arch::naked_asm, collections::HashMap, slice, sync::OnceLock};
 
-use patchy::{Patch, Result, ReturnType};
+use patchy::{PatchSession, Result, ReturnType};
 
 use crate::{config::DEFAULT_PLANE_HEALTH, structs::aircraft_body::AircraftBody};
 
@@ -37,7 +37,7 @@ pub(crate) fn install_plane_health(configured_health: HashMap<String, f32>) {
 }
 
 /// Prepares the aircraft-health hook when at least one custom value is configured.
-pub unsafe fn patch_plane_health() -> Result {
+pub unsafe fn patch_plane_health(session: &mut PatchSession) -> Result {
     let Some(health_overrides) = PLANE_HEALTH.get() else {
         log::error!("plane_health: plane health definitions were not initialized");
         return Ok(());
@@ -58,7 +58,7 @@ pub unsafe fn patch_plane_health() -> Result {
         return Ok(());
     }
 
-    Patch::patch_call(
+    session.patch_call(
         HOOK_ADDRESS,
         apply_plane_health_bridge as *const (),
         ORIGINAL_BYTES.len(),

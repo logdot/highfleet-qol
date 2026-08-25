@@ -8,7 +8,7 @@
 
 use std::{collections::HashMap, ffi::CString};
 
-use patchy::{Patch, Result, ReturnType};
+use patchy::{PatchSession, Result, ReturnType};
 
 use crate::{config::ShopPart, rng};
 
@@ -72,7 +72,7 @@ const HOOK_ADDRESS: usize = 0x140299c5c;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 const HOOK_ADDRESS: usize = 0x1402bcd49;
 
-/// Patches the shop generation to include custom parts.
+/// Prepares a shop-generation patch that includes custom parts.
 ///
 /// `parts` is a map of part model ID strings (e.g. `"MDL_WEAPON_01"`) to their
 /// [`ShopPart`] configuration (probability, min/max count). Each time a shop is
@@ -82,7 +82,10 @@ const HOOK_ADDRESS: usize = 0x1402bcd49;
 /// # Safety
 /// Must be called while the game process memory is accessible and before the shop
 /// generation function runs.
-pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) -> Result {
+pub unsafe fn patch_custom_parts(
+    session: &mut PatchSession,
+    parts: HashMap<String, Vec<ShopPart>>,
+) -> Result {
     if parts.is_empty() {
         log::info!("No custom parts to inject, skipping patch.");
         return Ok(());
@@ -145,7 +148,7 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) -> Resul
     }
 
     log::info!(
-        "Patching shop generation to inject up to {} custom part type(s).",
+        "Preparing shop-generation patch for up to {} custom part type(s).",
         custom_parts.len()
     );
 
@@ -156,7 +159,7 @@ pub unsafe fn patch_custom_parts(parts: HashMap<String, Vec<ShopPart>>) -> Resul
     CUSTOM_PARTS = custom_parts;
 
     // Replay the complete overwritten instruction before injecting the additional parts.
-    Patch::patch_call(
+    session.patch_call(
         HOOK_ADDRESS,
         inject_custom_parts as *const (),
         6,

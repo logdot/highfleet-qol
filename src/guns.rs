@@ -1,26 +1,26 @@
-use patchy::{Condition, Patch, Result, ReturnType, Trampoline};
+use patchy::{Condition, PatchSession, Result, ReturnType, Trampoline};
 
 /// In v1.151, gun blocking already exists in the game.
 /// This function NOPs out the blocking check to allow guns to fire through own ship.
 #[cfg(feature = "1_151")]
-pub unsafe fn patch_sector_blocking() -> Result {
+pub unsafe fn patch_sector_blocking(session: &mut PatchSession) -> Result {
     let address: usize = 0x14003314d;
     let size: usize = 6;
 
     let data = vec![0x90; size]; // NOP instructions
-    Patch::overwrite(address, &data)?;
+    session.overwrite(address, &data)?;
     Ok(())
 }
 
 /// Gun blocking is already absent in v1.163, so "unblocking" is a no-op.
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-pub unsafe fn patch_sector_blocking() -> Result {
+pub unsafe fn patch_sector_blocking(_session: &mut PatchSession) -> Result {
     Ok(())
 }
 
 /// In v1.151, gun blocking is native — nothing to restore.
 #[cfg(feature = "1_151")]
-pub unsafe fn patch_sector_restoration() -> Result {
+pub unsafe fn patch_sector_restoration(_session: &mut PatchSession) -> Result {
     Ok(())
 }
 
@@ -35,7 +35,7 @@ pub unsafe fn patch_sector_restoration() -> Result {
 /// 3. Injecting a trampoline at the charge-decrement point that calls the Rust
 ///    function and conditionally skips firing if blocked
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-pub unsafe fn patch_sector_restoration() -> Result {
+pub unsafe fn patch_sector_restoration(session: &mut PatchSession) -> Result {
     // FireGun addresses in v1.163
     const INJECTION_ADDR: usize = 0x140032f22;
     const EXIT_0_ADDR: usize = 0x140032ef0;
@@ -75,7 +75,7 @@ pub unsafe fn patch_sector_restoration() -> Result {
         .expect("gun-blocking trampoline label was bound twice");
     cave.relative_jump(EXIT_0_ADDR);
 
-    let p = Patch::detour_trampoline(INJECTION_ADDR, ORIGINAL_BYTES.len(), cave)?;
+    let p = session.detour_trampoline(INJECTION_ADDR, ORIGINAL_BYTES.len(), cave)?;
     let cave_base = p
         .trampoline_address()
         .expect("gun-blocking detour has no trampoline");

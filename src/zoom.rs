@@ -1,4 +1,4 @@
-use patchy::{Patch, Result, ReturnType};
+use patchy::{PatchSession, Result, ReturnType};
 
 static mut MIN_ZOOM: u32 = 3;
 static mut MAX_ZOOM: u32 = 3;
@@ -18,7 +18,7 @@ static MAX_ZOOM_ADDR: usize = 0x1403c11d0;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 static ZOOM_LEVEL_ADDR: usize = 0x1403c11cc;
 
-pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) -> Result {
+pub unsafe fn patch_zoom(session: &mut PatchSession, min_zoom: u32, max_zoom: u32) -> Result {
     MAX_ZOOM = max_zoom;
     MIN_ZOOM = min_zoom;
 
@@ -38,7 +38,7 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) -> Result {
         override_count = 20;
     }
 
-    Patch::patch_call(
+    session.patch_call(
         address,
         set_zoom_level as *const (),
         override_count,
@@ -48,7 +48,7 @@ pub unsafe fn patch_zoom(min_zoom: u32, max_zoom: u32) -> Result {
     Ok(())
 }
 
-pub unsafe fn patch_levels(zoom_levels: Vec<f32>) -> Result {
+pub unsafe fn patch_levels(session: &mut PatchSession, zoom_levels: Vec<f32>) -> Result {
     ZOOM_LEVELS = zoom_levels;
 
     let address;
@@ -61,7 +61,7 @@ pub unsafe fn patch_levels(zoom_levels: Vec<f32>) -> Result {
         address = 0x14026b03f;
     }
 
-    Patch::patch_call(
+    session.patch_call(
         address,
         calc_zoom_value as *const (),
         5,

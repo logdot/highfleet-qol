@@ -1,8 +1,8 @@
 use std::arch::asm;
 
-use patchy::{Patch, Result, ReturnType};
+use patchy::{PatchSession, Result, ReturnType};
 
-pub unsafe fn dumpable() -> Result {
+pub unsafe fn dumpable(session: &mut PatchSession) -> Result {
     let address;
     if cfg!(feature = "1_151") {
         address = 0x1400240c0;
@@ -13,7 +13,7 @@ pub unsafe fn dumpable() -> Result {
         address = 0x1400256e0;
     }
 
-    Patch::patch_call(
+    session.patch_call(
         address,
         set_dumpable as *const (),
         6,

@@ -1,6 +1,6 @@
-use patchy::{Patch, Result};
+use patchy::{PatchSession, Result};
 
-pub unsafe fn patch_ttl() -> Result {
+pub unsafe fn patch_ttl(session: &mut PatchSession) -> Result {
     let address;
     if cfg!(feature = "1_151") {
         address = 0x140050372;
@@ -12,6 +12,6 @@ pub unsafe fn patch_ttl() -> Result {
     }
 
     let data = [0x90u8; 4]; // NOP instructions
-    Patch::overwrite(address, &data)?;
+    session.overwrite(address, &data)?;
     Ok(())
 }
