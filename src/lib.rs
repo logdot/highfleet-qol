@@ -2,6 +2,8 @@
 
 #![deny(missing_docs)]
 
+highfleet_mod_api::export_logger!();
+
 use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
@@ -10,8 +12,6 @@ pub mod config;
 mod dumpable;
 mod flare_crash;
 mod guns;
-#[cfg(debug_assertions)]
-mod logger;
 mod parts;
 mod plane;
 mod plane_guns;
