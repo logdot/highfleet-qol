@@ -8,6 +8,8 @@ use std::ffi::{c_char, CStr};
 
 use crate::config::Config;
 
+#[cfg(all(feature = "1_151", not(feature = "1_163")))]
+mod aircraft_retreat;
 pub mod config;
 mod dumpable;
 mod flare_crash;
@@ -122,6 +124,23 @@ unsafe extern "C" fn init() -> bool {
         log::info!("Unblocked TTL disabled");
     }
 
+    #[cfg(all(feature = "1_151", not(feature = "1_163")))]
+    let aircraft_retreat_thunks = if config.enable_aircraft_retreat {
+        match aircraft_retreat::patch_aircraft_retreat(&mut patch_session) {
+            Ok(thunks) => Some(thunks),
+            Err(error) => {
+                log::error!("Unable to prepare aircraft retreat prototype: {error}");
+                return false;
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(all(feature = "1_151", not(feature = "1_163"))))]
+    if config.enable_aircraft_retreat {
+        log::warn!("Aircraft retreat prototype requires a 1.151-only build; ignoring setting");
+    }
+
     plane::patch_planes(&config.planes);
     prepare_patch!(plane_guns::patch_plane_guns(&mut patch_session));
     prepare_patch!(plane_health::patch_plane_health(&mut patch_session));
@@ -141,6 +160,12 @@ unsafe extern "C" fn init() -> bool {
         config.sell_multiplier
     ));
 
+    // patchy may report a cache/protection error after publishing source bytes.
+    // Once installation is attempted, native CALL targets must remain allocated.
+    #[cfg(all(feature = "1_151", not(feature = "1_163")))]
+    if let Some(thunks) = aircraft_retreat_thunks {
+        std::mem::forget(thunks);
+    }
     if let Err(error) = patch_session.install_permanently() {
         log::error!("Unable to install prepared patches: {error}");
         return false;
