@@ -12,6 +12,8 @@ pub mod config;
 mod dumpable;
 mod flare_crash;
 mod guns;
+#[cfg(all(feature = "1_151", not(feature = "1_163")))]
+mod missile_targets;
 mod parts;
 mod plane;
 mod plane_guns;
@@ -120,6 +122,17 @@ unsafe extern "C" fn init() -> bool {
         log::info!("Unblocked TTL enabled");
     } else {
         log::info!("Unblocked TTL disabled");
+    }
+
+    #[cfg(all(feature = "1_151", not(feature = "1_163")))]
+    if config.enable_missile_target_distribution_prototype {
+        prepare_patch!(missile_targets::patch_missile_targets(&mut patch_session));
+    }
+    #[cfg(not(all(feature = "1_151", not(feature = "1_163"))))]
+    if config.enable_missile_target_distribution_prototype {
+        log::warn!(
+            "Missile target distribution prototype requires a 1.151-only build; ignoring setting"
+        );
     }
 
     plane::patch_planes(&config.planes);

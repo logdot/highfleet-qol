@@ -49,6 +49,11 @@ pub struct Config {
     ///
     /// Enabled by default.
     pub enable_arcade_zoom: bool,
+    /// Distributes initial CV-selected strategic missile targets round robin in Steam 1.151.
+    ///
+    /// Experimental and disabled by default. Later guidance/retargeting is unchanged.
+    #[serde(default)]
+    pub enable_missile_target_distribution_prototype: bool,
     /// Highest zoom level the player can select.
     ///
     /// This level must have a matching entry in [`Config::zoom_levels`]. The default is `5`.
@@ -162,6 +167,7 @@ impl Default for Config {
             enable_flare_crash_fix: true,
             enable_unblocked_ttl: false,
             enable_arcade_zoom: true,
+            enable_missile_target_distribution_prototype: false,
             max_zoom_level: 5,
             min_zoom_level: 3,
             zoom_levels: vec![14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
