@@ -1,12 +1,21 @@
 //! Manual elevation (`m_floor`) control for the ship editor (Steam 1.163 only).
 //!
 //! While a part is held in the editor, the configured keys raise or lower its floor or give it
-//! back to the game's automatic elevation solver. A small transparent window shows the held part,
-//! its floor and its mounted modules.
+//! back to the game's automatic elevation solver. A readout shows the held part, its floor and its
+//! mounted modules.
 //!
-//! This is a direct port of the standalone `highfleet-elevation` mod: a worker thread polls the
-//! keys and writes to the held part, and an overlay thread draws the readout. Nothing is patched,
-//! so there is nothing to undo.
+//! Two ways to run, chosen by the `hint` setting:
+//!
+//! * **native** (default): the `call 0x1400d4380` at `0x140303fb4` (E8 rel32, the editor's label
+//!   pass, which draws into the same offscreen target the game flushes right afterwards) is wrapped
+//!   by a trampoline: original call, then [`native_tick`]. That runs on the game thread once per
+//!   editor frame, so it polls the keys, writes to the held part and draws the readout with the
+//!   game's own font code. No extra threads and no extra window.
+//! * **window** (and the fallback when the hook site does not look right): the original design of
+//!   the standalone `highfleet-elevation` mod. A worker thread polls the keys and an overlay
+//!   thread draws the readout in a transparent window above the game.
+//!
+//! With `hint: off` the native hook still handles the keys but draws nothing.
 //!
 //! Addresses and offsets (Steam 1.163, image base `0x140000000`):
 //!
@@ -22,7 +31,15 @@
 //! `m_floor_type` bit `0x01` makes the solver recompute the floor and `0x10` makes it force
 //! floor 3. Parts with neither keep the floor stored in the ship.
 
-use std::{collections::HashMap, sync::Mutex, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    ffi::{c_char, c_void, CStr, CString},
+    sync::{Mutex, OnceLock},
+    thread,
+    time::Duration,
+};
+
+use patchy::{PatchSession, ReturnType, Trampoline};
 
 use windows_sys::Win32::{
     Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -38,21 +55,22 @@ use windows_sys::Win32::{
             VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE_READWRITE,
             PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READWRITE, PAGE_WRITECOPY,
         },
+        Threading::GetCurrentProcessId,
     },
     UI::{
         Input::KeyboardAndMouse::GetAsyncKeyState,
         WindowsAndMessaging::{
-            CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect, GetMessageA,
-            LoadCursorW, RegisterClassA, SetLayeredWindowAttributes, SetTimer, SetWindowPos,
-            ShowWindow, TranslateMessage, HWND_TOPMOST, IDC_ARROW, LWA_COLORKEY, MSG,
-            SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSA,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-            WS_POPUP,
+            CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect, GetForegroundWindow,
+            GetMessageA, GetWindowThreadProcessId, LoadCursorW, RegisterClassA,
+            SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TranslateMessage,
+            HWND_TOPMOST, IDC_ARROW, LWA_COLORKEY, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
+            WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSA, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
         },
     },
 };
 
-use crate::config::{ElevationConfig, ResolvedKeys};
+use crate::config::{ElevationConfig, ElevationHint, ResolvedKeys};
 
 const IMAGE_BASE: usize = 0x1_4000_0000;
 const HELD_PART: usize = 0x1_403c_0d88;
@@ -74,31 +92,102 @@ const MIN_FLOOR: i32 = 0;
 /// Pixel colour that is drawn as transparent in the overlay window.
 const COLOR_KEY: COLORREF = 0x00ff_00ff;
 
+/// The `call 0x1400d4380` (editor label pass) that is wrapped, as `E8 rel32`.
+const HOOK_SITE: usize = 0x1_4030_3fb4;
+const HOOK_TARGET: usize = 0x1_400d_4380;
+const HOOK_BYTES: [u8; 5] = [0xe8, 0xc7, 0x03, 0xdd, 0xff];
+
+/// The global `hgeResourceManager*` (`Media.res`).
+const MEDIA_RES: usize = 0x1_43a1_19e8;
+/// `hgeResourceManager::GetFont(manager, name)`.
+const GET_FONT: usize = 0x1_4017_03e0;
+/// `(name, scale, blend, colour)`: gets a font and sets its scale, blend and colour (if non-zero).
+const STYLE_FONT: usize = 0x1_401a_8710;
+/// The game's modified `hgeFont::Render(font, x, y, align, text, *out_w, *out_h, ?, angle)`.
+const RENDER: usize = 0x1_4016_eb40;
+
+const OFF_FONT_SCALE: usize = 0x100c;
+const OFF_FONT_COLOR: usize = 0x1020;
+const OFF_FONT_BLEND: usize = 0x1028;
+
+/// The font most of the editor's own labels use.
+const HINT_FONT: &CStr = c"dinpro_14_bold";
+/// Opaque white (`0xAARRGGBB`).
+const HINT_COLOR: u32 = 0xffff_ffff;
+/// Normal alpha blending (`BLEND_DEFAULT`).
+const HINT_BLEND: i32 = 2;
+/// The game draws in a 1920x1080 frame that is scaled to the screen. The right side of the editor
+/// is free, so the readout hangs from the top right corner.
+const HINT_X: f32 = 1880.0;
+const HINT_Y: f32 = 24.0;
+const ALIGN_RIGHT: u32 = 1;
+/// Longest readout, so a part with very many mounted modules cannot run off the screen.
+const MAX_HINT_LINES: usize = 12;
+
+type GetFontFn = unsafe extern "win64" fn(*mut c_void, *const c_char) -> *mut c_void;
+type StyleFn = unsafe extern "win64" fn(*const c_char, f32, i32, u32) -> *mut c_void;
+type RenderFn = unsafe extern "win64" fn(
+    *mut c_void,
+    f32,
+    f32,
+    u32,
+    *const c_char,
+    *mut f32,
+    *mut f32,
+    u64,
+    f32,
+) -> i32;
+
 struct Settings {
     max_floor: i32,
     sync_children: bool,
     child_offset: i32,
     keys: ResolvedKeys,
+    /// First lines of the readout: the title and the keys.
+    header: String,
+    /// How the readout is shown after checking that the native hook site is usable.
+    hint: ElevationHint,
 }
 
+static SETTINGS: OnceLock<Settings> = OnceLock::new();
+/// Key and part state of the native hook, which only ever runs on the game thread.
+static NATIVE_STATE: OnceLock<Mutex<KeyState>> = OnceLock::new();
 static STATUS: Mutex<String> = Mutex::new(String::new());
-static HINT_LINE: Mutex<String> = Mutex::new(String::new());
 
-/// Starts the key worker and, if enabled, the overlay window. Does nothing when the game's image
-/// is not loaded at its usual address.
-pub unsafe fn start(config: &ElevationConfig) {
+/// Prepares manual elevation: checks the game image, reads the settings and, unless the hint is
+/// set to `window`, prepares the native hook. Nothing is started yet; see [`start`].
+pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> patchy::Result {
     if GetModuleHandleA(std::ptr::null()) as usize != IMAGE_BASE {
         log::error!("Elevation: unexpected image base, not enabling");
-        return;
+        return Ok(());
     }
 
     let keys = config.keys.resolve();
-    let hint = format!(
+    let header = format!(
         "ELEVATION  {} up  {} down  {} auto\n",
         keys.raise_label, keys.lower_label, keys.auto_label
     );
-    if let Ok(mut line) = HINT_LINE.lock() {
-        *line = hint;
+
+    let mut hint = config.hint;
+    if hint != ElevationHint::Window {
+        // If another mod (or the debug draw test) already changed this call, a failed patch would
+        // stop every QoL feature from installing, so look first and fall back to the window.
+        let site = std::slice::from_raw_parts(HOOK_SITE as *const u8, HOOK_BYTES.len());
+        if site != HOOK_BYTES {
+            log::error!(
+                "Elevation: the editor label call at {HOOK_SITE:#x} is not what was expected, using the overlay window instead"
+            );
+            hint = ElevationHint::Window;
+        }
+    }
+
+    if hint != ElevationHint::Window {
+        let mut trampoline = Trampoline::new();
+        trampoline.absolute_call(HOOK_TARGET as *const ());
+        trampoline.preserved_call(native_tick as *const (), &[], &[], ReturnType::None);
+        trampoline.relative_jump(HOOK_SITE + HOOK_BYTES.len());
+        session.detour_trampoline(HOOK_SITE, HOOK_BYTES.len(), trampoline)?;
+        let _ = NATIVE_STATE.set(Mutex::new(KeyState::default()));
     }
 
     let settings = Settings {
@@ -106,34 +195,110 @@ pub unsafe fn start(config: &ElevationConfig) {
         sync_children: config.sync_children,
         child_offset: config.child_offset,
         keys,
+        header,
+        hint,
     };
     log::info!(
-        "Elevation enabled: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {}, overlay {})",
+        "Elevation prepared: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {}, hint {:?})",
         settings.keys.raise_label,
         settings.keys.lower_label,
         settings.keys.auto_label,
         settings.max_floor,
         settings.sync_children,
         settings.child_offset,
-        config.overlay
+        settings.hint
     );
+    let _ = SETTINGS.set(settings);
+    Ok(())
+}
+
+/// Starts the key thread and the overlay window when the hint is `window`. The native hook needs
+/// no threads, so this does nothing for the other modes.
+pub unsafe fn start() {
+    let Some(settings) = SETTINGS.get() else {
+        return;
+    };
+    if settings.hint != ElevationHint::Window {
+        return;
+    }
 
     if let Err(error) = thread::Builder::new()
         .name("qol-elevation".into())
-        .spawn(move || unsafe { worker(settings) })
+        .spawn(|| unsafe { worker() })
     {
         log::error!("Elevation: unable to start the key thread: {error}");
         return;
     }
-
-    if config.overlay {
-        if let Err(error) = thread::Builder::new()
-            .name("qol-elevation-overlay".into())
-            .spawn(|| unsafe { overlay_thread() })
-        {
-            log::error!("Elevation: unable to start the overlay thread: {error}");
-        }
+    if let Err(error) = thread::Builder::new()
+        .name("qol-elevation-overlay".into())
+        .spawn(|| unsafe { overlay_thread() })
+    {
+        log::error!("Elevation: unable to start the overlay thread: {error}");
     }
+}
+
+// --- the native hook ------------------------------------------------------------------------
+
+/// Runs once per editor frame, right after the game drew its own editor labels and before it
+/// flushes them. Handles the keys, then draws the readout into the same target.
+unsafe extern "C" fn native_tick() {
+    let Some(settings) = SETTINGS.get() else {
+        return;
+    };
+    let Some(state) = NATIVE_STATE.get() else {
+        return;
+    };
+    if let Ok(mut state) = state.lock() {
+        poll_keys(settings, &mut state);
+    }
+    if settings.hint == ElevationHint::Native {
+        draw_hint(settings);
+    }
+}
+
+/// Draws the readout with the game's own text code. Fonts are shared objects that every caller
+/// restyles before use, so the style is saved and put back.
+unsafe fn draw_hint(_settings: &Settings) {
+    let manager: *mut c_void = read(MEDIA_RES);
+    if manager.is_null() {
+        return;
+    }
+    let get_font: GetFontFn = std::mem::transmute(GET_FONT);
+    let font = get_font(manager, HINT_FONT.as_ptr());
+    if font.is_null() {
+        return;
+    }
+
+    let mut text = build_status();
+    let lines = text
+        .lines()
+        .take(MAX_HINT_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    // `@` is a line break for the game's text code and a NUL would end the text early.
+    text = lines.replace(['@', '\0'], " ");
+    let Ok(text) = CString::new(text) else { return };
+
+    let base = font as usize;
+    let old_scale: f32 = read(base + OFF_FONT_SCALE);
+    let old_color: u32 = read(base + OFF_FONT_COLOR);
+    let old_blend: i32 = read(base + OFF_FONT_BLEND);
+
+    let style: StyleFn = std::mem::transmute(STYLE_FONT);
+    style(HINT_FONT.as_ptr(), 1.0, HINT_BLEND, HINT_COLOR);
+    let render: RenderFn = std::mem::transmute(RENDER);
+    render(
+        font,
+        HINT_X,
+        HINT_Y,
+        ALIGN_RIGHT,
+        text.as_ptr(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        0,
+        0.0,
+    );
+    style(HINT_FONT.as_ptr(), old_scale, old_blend, old_color);
 }
 
 // --- reading the game's memory --------------------------------------------------------------
@@ -304,35 +469,63 @@ unsafe fn key_down(code: u16) -> bool {
     GetAsyncKeyState(code as i32) as u16 & 0x8000 != 0
 }
 
-unsafe fn worker(settings: Settings) {
-    let mut original = HashMap::new();
-    let (mut raise_was, mut lower_was, mut auto_was) = (false, false, false);
+/// Remembers which keys were down on the previous poll so that only a new press counts, and the
+/// `m_floor_type` of the parts that were changed.
+#[derive(Default)]
+struct KeyState {
+    raise_was: bool,
+    lower_was: bool,
+    auto_was: bool,
+    original: HashMap<usize, u64>,
+}
+
+/// True when the game's window has the keyboard focus. `GetAsyncKeyState` sees keys typed into
+/// any program, so keys are ignored while another window is active.
+unsafe fn game_has_focus() -> bool {
+    let mut process = 0u32;
+    GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
+    process == GetCurrentProcessId()
+}
+
+/// Applies the keys that were newly pressed since the last call.
+unsafe fn poll_keys(settings: &Settings, state: &mut KeyState) {
+    let focused = game_has_focus();
+    let lower = focused && key_down(settings.keys.lower);
+    let raise = focused && key_down(settings.keys.raise);
+    let auto = focused && key_down(settings.keys.auto);
+
+    if lower && !state.lower_was {
+        adjust(-1, settings, &mut state.original);
+    }
+    if raise && !state.raise_was {
+        adjust(1, settings, &mut state.original);
+    }
+    if auto && !state.auto_was {
+        restore(&mut state.original);
+    }
+    state.raise_was = raise;
+    state.lower_was = lower;
+    state.auto_was = auto;
+}
+
+unsafe fn worker() {
+    let Some(settings) = SETTINGS.get() else {
+        return;
+    };
+    let mut state = KeyState::default();
 
     loop {
         thread::sleep(Duration::from_millis(15));
-        let lower = key_down(settings.keys.lower);
-        let raise = key_down(settings.keys.raise);
-        let auto = key_down(settings.keys.auto);
-
-        if lower && !lower_was {
-            adjust(-1, &settings, &mut original);
-        }
-        if raise && !raise_was {
-            adjust(1, &settings, &mut original);
-        }
-        if auto && !auto_was {
-            restore(&mut original);
-        }
-        (raise_was, lower_was, auto_was) = (raise, lower, auto);
+        poll_keys(settings, &mut state);
     }
 }
 
 // --- on-screen readout ----------------------------------------------------------------------
 
 unsafe fn build_status() -> String {
-    let mut status = HINT_LINE
-        .lock()
-        .map(|line| line.clone())
+    let mut status = SETTINGS
+        .get()
+        .map(|settings| settings.header.clone())
         .unwrap_or_default();
 
     let Some(part) = held_part() else {

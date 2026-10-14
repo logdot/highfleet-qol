@@ -190,6 +190,11 @@ unsafe extern "C" fn init() -> bool {
 
     #[cfg(not(feature = "1_151"))]
     {
+        if config.elevation.enabled {
+            prepare_patch!(elevation::prepare(&mut patch_session, &config.elevation));
+        } else {
+            log::info!("Elevation disabled");
+        }
         if config.enable_intro {
             prepare_patch!(intro::prepare(&mut patch_session));
         }
@@ -220,7 +225,7 @@ unsafe extern "C" fn init() -> bool {
 
     #[cfg(not(feature = "1_151"))]
     if config.elevation.enabled && GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
-        elevation::start(&config.elevation);
+        elevation::start();
     }
 
     true
