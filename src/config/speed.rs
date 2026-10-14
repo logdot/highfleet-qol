@@ -4,8 +4,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SpeedPreset {
+    /// The game's own curve for the running version: [`Classic`](Self::Classic) on 1.151 and
+    /// [`Modern`](Self::Modern) on 1.163. Only 1.163 is supported for now, so this is
+    /// [`Modern`](Self::Modern).
+    Vanilla,
     /// The 1.151 curve, `25 * TWR`. Speed grows linearly with thrust-to-weight ratio.
     Classic,
+    /// The 1.163 curve, `50 * (TWR - 1) ^ 0.5`.
+    Modern,
     /// Use [`SpeedConfig::coefficient`], [`SpeedConfig::subtract`] and [`SpeedConfig::exponent`].
     Custom,
 }
@@ -16,14 +22,15 @@ pub enum SpeedPreset {
 /// the ship editor shows it in km/h (m/s times 3.6). Steam 1.163 uses
 /// `50 * (TWR - 1) ^ 0.5`, Steam 1.151 used `25 * TWR`.
 ///
+/// The defaults leave the game's own curve and speed limit alone.
+///
 /// The game caches each ship's speed, so reopen or edit a ship to see a new value.
 /// Only has an effect on Steam 1.163.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpeedConfig {
-    /// Turns the speed curve change on. Disabled by default, which keeps the game's own curve.
-    pub enabled: bool,
-    /// `classic` for the 1.151 curve, or `custom` to use the three numbers below.
+    /// `vanilla` for the game's own curve, `classic` for the 1.151 curve, `modern` for the 1.163
+    /// curve, or `custom` to use the three numbers below.
     pub preset: SpeedPreset,
     /// Multiplier in m/s. Used by the `custom` preset. Must not be negative.
     pub coefficient: f32,
@@ -38,11 +45,10 @@ pub struct SpeedConfig {
 impl Default for SpeedConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            preset: SpeedPreset::Classic,
-            coefficient: 25.0,
-            subtract: 0.0,
-            exponent: 1.0,
+            preset: SpeedPreset::Vanilla,
+            coefficient: 50.0,
+            subtract: 1.0,
+            exponent: 0.5,
             max_kmh: 0.0,
         }
     }
@@ -66,6 +72,7 @@ impl SpeedConfig {
     pub fn curve(&self) -> Option<SpeedCurve> {
         let (coefficient, subtract, exponent) = match self.preset {
             SpeedPreset::Classic => (25.0, 0.0, 1.0),
+            SpeedPreset::Vanilla | SpeedPreset::Modern => (50.0, 1.0, 0.5),
             SpeedPreset::Custom => (self.coefficient, self.subtract, self.exponent),
         };
 
@@ -87,6 +94,14 @@ impl SpeedConfig {
 }
 
 impl SpeedCurve {
+    /// Whether this is the game's own 1.163 curve with no speed limit.
+    pub fn is_vanilla(&self) -> bool {
+        self.coefficient == 50.0
+            && self.subtract == 1.0
+            && self.exponent == 0.5
+            && self.max_mps == 0.0
+    }
+
     /// Cruise speed in m/s for a thrust-to-weight ratio.
     pub fn speed_mps(&self, twr: f32) -> f32 {
         let base = twr - self.subtract;
@@ -110,13 +125,14 @@ mod tests {
     fn omitted_fields_use_defaults() {
         let config: SpeedConfig = serde_json::from_str("{}").unwrap();
 
-        assert!(!config.enabled);
-        assert_eq!(config.preset, SpeedPreset::Classic);
+        assert_eq!(config.preset, SpeedPreset::Vanilla);
+        assert!(config.curve().unwrap().is_vanilla());
     }
 
     #[test]
     fn classic_is_linear() {
-        let curve = SpeedConfig::default().curve().unwrap();
+        let config: SpeedConfig = serde_json::from_str(r#"{"preset":"classic"}"#).unwrap();
+        let curve = config.curve().unwrap();
 
         assert_eq!(curve.speed_mps(2.0), 50.0);
         assert_eq!(curve.speed_mps(4.0), 100.0);

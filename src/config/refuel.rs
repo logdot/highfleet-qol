@@ -1,9 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-/// Smallest accepted refuel rate multiplier.
-pub const MIN_REFUEL_MULTIPLIER: f32 = 0.01;
-/// Largest accepted refuel rate multiplier.
-pub const MAX_REFUEL_MULTIPLIER: f32 = 10000.0;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Settings for the `refuel` section of `qol.json`.
 ///
@@ -11,40 +6,39 @@ pub const MAX_REFUEL_MULTIPLIER: f32 = 10000.0;
 /// each frame. These multipliers scale the rate, so a very large value just means "fill up
 /// at once"; it can never deliver more than the tank and the station allow.
 ///
+/// Both multipliers default to `1.0`, the game's own rate, which leaves the game untouched.
+/// Any finite value is accepted, including `0` (never refuel) and negative values (drain fuel).
+///
 /// Only has an effect on Steam 1.163.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RefuelConfig {
-    /// Turns the refuel rate change on. Disabled by default.
-    pub enabled: bool,
     /// How much faster the player's fleet refuels. `1.0` is the normal rate.
-    ///
-    /// Values are limited to `0.01` through `10000.0`.
+    #[serde(deserialize_with = "finite_multiplier")]
     pub player_rate_multiplier: f32,
     /// The same for AI fleets, which use the same code as the player. `1.0` is the normal rate.
-    ///
-    /// Values are limited to `0.01` through `10000.0`.
+    #[serde(deserialize_with = "finite_multiplier")]
     pub ai_rate_multiplier: f32,
 }
 
 impl Default for RefuelConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             player_rate_multiplier: 1.0,
             ai_rate_multiplier: 1.0,
         }
     }
 }
 
-impl RefuelConfig {
-    /// Returns `value` limited to the accepted range, or `1.0` if it is not a number.
-    pub fn clamp_multiplier(value: f32) -> f32 {
-        if value.is_nan() {
-            1.0
-        } else {
-            value.clamp(MIN_REFUEL_MULTIPLIER, MAX_REFUEL_MULTIPLIER)
-        }
+/// Reads an `f32` and rejects values that are not finite.
+fn finite_multiplier<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    let value = f32::deserialize(deserializer)?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "multiplier must be a finite number",
+        ))
     }
 }
 
@@ -56,7 +50,6 @@ mod tests {
     fn omitted_fields_use_defaults() {
         let config: RefuelConfig = serde_json::from_str("{}").unwrap();
 
-        assert!(!config.enabled);
         assert_eq!(config.player_rate_multiplier, 1.0);
         assert_eq!(config.ai_rate_multiplier, 1.0);
     }
@@ -64,18 +57,27 @@ mod tests {
     #[test]
     fn partial_section_keeps_other_defaults() {
         let config: RefuelConfig =
-            serde_json::from_str(r#"{"enabled":true,"player_rate_multiplier":5.0}"#).unwrap();
+            serde_json::from_str(r#"{"player_rate_multiplier":5.0}"#).unwrap();
 
-        assert!(config.enabled);
         assert_eq!(config.player_rate_multiplier, 5.0);
         assert_eq!(config.ai_rate_multiplier, 1.0);
     }
 
     #[test]
-    fn multipliers_are_clamped() {
-        assert_eq!(RefuelConfig::clamp_multiplier(0.0), MIN_REFUEL_MULTIPLIER);
-        assert_eq!(RefuelConfig::clamp_multiplier(1.0e9), MAX_REFUEL_MULTIPLIER);
-        assert_eq!(RefuelConfig::clamp_multiplier(f32::NAN), 1.0);
-        assert_eq!(RefuelConfig::clamp_multiplier(3.0), 3.0);
+    fn zero_and_negative_multipliers_are_allowed() {
+        let config: RefuelConfig =
+            serde_json::from_str(r#"{"player_rate_multiplier":0.0,"ai_rate_multiplier":-2.0}"#)
+                .unwrap();
+
+        assert_eq!(config.player_rate_multiplier, 0.0);
+        assert_eq!(config.ai_rate_multiplier, -2.0);
+    }
+
+    #[test]
+    fn non_numbers_are_rejected() {
+        assert!(
+            serde_json::from_str::<RefuelConfig>(r#"{"player_rate_multiplier":"fast"}"#).is_err()
+        );
+        assert!(serde_json::from_str::<RefuelConfig>(r#"{"ai_rate_multiplier":1e999}"#).is_err());
     }
 }

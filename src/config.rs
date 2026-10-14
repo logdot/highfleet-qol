@@ -16,7 +16,7 @@ mod speed;
 
 pub use loadout::{ConfigItemMunition, ConfigLoadout};
 pub use plane::{ConfigPlane, DEFAULT_PLANE_HEALTH};
-pub use refuel::{RefuelConfig, MAX_REFUEL_MULTIPLIER, MIN_REFUEL_MULTIPLIER};
+pub use refuel::RefuelConfig;
 pub use speed::{SpeedConfig, SpeedCurve, SpeedPreset};
 
 use crate::plane as plane_runtime;
@@ -88,12 +88,12 @@ pub struct Config {
     pub sell_multiplier: f32,
     /// Changes how fast fleets refuel at stations. Only has an effect on Steam 1.163.
     ///
-    /// Disabled by default.
+    /// Uses the game's own rate by default.
     #[serde(default)]
     pub refuel: RefuelConfig,
     /// Changes the map cruise-speed formula. Only has an effect on Steam 1.163.
     ///
-    /// Disabled by default.
+    /// Uses the game's own curve by default.
     #[serde(default)]
     pub speed: SpeedConfig,
 }
@@ -241,25 +241,24 @@ mod tests {
         let config: Config = serde_json::from_str(OLD_CONFIG).unwrap();
 
         assert!(config.enable_reduced_shake);
-        assert!(!config.refuel.enabled);
-        assert!(!config.speed.enabled);
+        assert_eq!(config.refuel.player_rate_multiplier, 1.0);
+        assert_eq!(config.speed.preset, SpeedPreset::Vanilla);
     }
 
     #[test]
     fn refuel_and_speed_sections_are_read() {
         let json = OLD_CONFIG.replacen(
             "\"planes\"",
-            r#""refuel": {"enabled": true, "player_rate_multiplier": 4.0},
-        "speed": {"enabled": true, "preset": "custom", "exponent": 0.75},
+            r#""refuel": {"player_rate_multiplier": 4.0},
+        "speed": {"preset": "custom", "exponent": 0.75},
         "planes""#,
             1,
         );
         let config: Config = serde_json::from_str(&json).unwrap();
 
-        assert!(config.refuel.enabled);
         assert_eq!(config.refuel.player_rate_multiplier, 4.0);
         assert_eq!(config.refuel.ai_rate_multiplier, 1.0);
-        assert!(config.speed.enabled);
+        assert_eq!(config.speed.preset, SpeedPreset::Custom);
         assert_eq!(config.speed.exponent, 0.75);
     }
 }

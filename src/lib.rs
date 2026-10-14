@@ -154,26 +154,11 @@ unsafe extern "C" fn init() -> bool {
     #[cfg(not(feature = "1_151"))]
     {
         if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
-            if config.refuel.enabled || config.speed.enabled {
-                log::warn!("Refuel rate and speed curve need Steam 1.163, leaving them off");
-            }
+            log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
         } else {
-            if config.refuel.enabled {
-                prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
-            } else {
-                log::info!("Refuel rate disabled");
-            }
-
-            if config.speed.enabled {
-                prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
-            } else {
-                log::info!("Speed curve disabled");
-            }
+            prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
+            prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
         }
-    }
-    #[cfg(feature = "1_151")]
-    if config.refuel.enabled || config.speed.enabled {
-        log::warn!("Refuel rate and speed curve are not available on 1.151, leaving them off");
     }
 
     if let Err(error) = patch_session.install_permanently() {

@@ -43,7 +43,7 @@ unsafe fn site_matches() -> bool {
     window == EXPECTED && (FIFTY_ADDRESS as *const f32).read_unaligned() == 50.0
 }
 
-/// Prepares the speed curve patch. Does nothing unless the section is enabled.
+/// Prepares the speed curve patch. Does nothing while the curve is the game's own.
 pub unsafe fn patch_speed(session: &mut PatchSession, config: &SpeedConfig) -> Result {
     let Some(curve) = config.curve() else {
         log::error!(
@@ -51,6 +51,11 @@ pub unsafe fn patch_speed(session: &mut PatchSession, config: &SpeedConfig) -> R
         );
         return Ok(());
     };
+
+    if curve.is_vanilla() {
+        log::info!("Speed curve is the game's own, leaving it alone");
+        return Ok(());
+    }
 
     if !site_matches() {
         log::error!(

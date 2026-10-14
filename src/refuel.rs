@@ -93,11 +93,11 @@ unsafe fn site_matches(site: &RateSite) -> bool {
     target == site.constant && (site.constant as *const f32).read_unaligned() == site.base
 }
 
-/// Prepares the refuel rate patches. Does nothing unless the section is enabled and at least one
-/// multiplier differs from `1.0`.
+/// Prepares the refuel rate patches. Does nothing unless at least one multiplier differs from
+/// `1.0`.
 pub unsafe fn patch_refuel(session: &mut PatchSession, config: &RefuelConfig) -> Result {
-    let player = RefuelConfig::clamp_multiplier(config.player_rate_multiplier);
-    let ai = RefuelConfig::clamp_multiplier(config.ai_rate_multiplier);
+    let player = config.player_rate_multiplier;
+    let ai = config.ai_rate_multiplier;
 
     for site in &SITES {
         let multiplier = if site.player { player } else { ai };

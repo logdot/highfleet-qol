@@ -48,17 +48,17 @@ The list of toggles is:
 
 ## Refuel rate and speed curve (1.163 only)
 
-Two optional changes for the strategic map. Both are **off by default**, each has its own section in `qol.json`, and they only do anything on Steam 1.163 (on 1.151 they are ignored and a warning is logged).
+Two optional changes for the strategic map. Both **keep the game's own behaviour by default**, each has its own section in `qol.json`, and they only do anything on Steam 1.163 (on 1.151 they are ignored and a warning is logged).
 
 * **Refuel rate**: fleets take fuel from a station faster (or slower).
 * **Speed curve**: changes how fast a fleet cruises on the map for a given thrust-to-weight ratio (TWR) of its ships.
 
 ### Turning them on, step by step
 
-1. Start the game once with the mod installed. This creates `Modloader/config/qol.json` with a `refuel` and a `speed` section (both `"enabled": false`). If your `qol.json` already existed from an older version, it is not rewritten: add the sections below by hand. A missing section simply means the feature stays off.
-2. Close the game, open `Modloader/config/qol.json` and set `"enabled": true` in the section you want, plus the numbers (example below).
+1. Start the game once with the mod installed. This creates `Modloader/config/qol.json` with a `refuel` and a `speed` section holding the game's own values. If your `qol.json` already existed from an older version, it is not rewritten: add the sections below by hand. A missing section simply means the game's own behaviour.
+2. Close the game, open `Modloader/config/qol.json` and change the numbers in the section you want (example below).
 3. Start the game. Settings are read once at start-up, so restart after every change.
-4. Check `Modloader/logs/Highfleet_<date>.log`. A working setup logs lines like `Refuel rate patch prepared at 0x14011521f (200 -> 2000)` and `Speed curve patch prepared at 0x140080699 (50 * max(TWR - 0, 0) ^ 1)`. If a value is out of range the log says so and the feature stays off.
+4. Check `Modloader/logs/Highfleet_<date>.log`. A working setup logs lines like `Refuel rate patch prepared at 0x14011521f (200 -> 2000)` and `Speed curve patch prepared at 0x140080699 (50 * max(TWR - 0, 0) ^ 1)`. If a value is out of range the log says so and the game's own behaviour stays.
 5. Refuel: dock at a station with a part-empty tank and watch the fuel gauge. Speed: open a ship in the editor (or launch a fleet). The game caches each ship's speed, so reopen or edit the ship to see the new number.
 
 If you used the standalone `refuel.dll` or `speed.dll` mods, remove them: both patch the same game code, and this section replaces them (`refuel.ini` and the old speed settings are no longer read).
@@ -66,13 +66,11 @@ If you used the standalone `refuel.dll` or `speed.dll` mods, remove them: both p
 ```json
 {
   "refuel": {
-    "enabled": true,
     "player_rate_multiplier": 4.0,
     "ai_rate_multiplier": 1.0
   },
   "speed": {
-    "enabled": true,
-    "preset": "classic",
+    "preset": "custom",
     "coefficient": 25.0,
     "subtract": 0.0,
     "exponent": 1.0,
@@ -81,8 +79,8 @@ If you used the standalone `refuel.dll` or `speed.dll` mods, remove them: both p
 }
 ```
 
-* **Refuel**: multiplies how fast fleets take fuel at stations (`1.0` is normal, limited to `0.01` through `10000`). A huge value just means "fill up at once"; the amount is still capped by free tank space and station stock. The AI fleets use the same code, so `ai_rate_multiplier` changes how fast they refuel.
-* **Speed**: replaces the map cruise speed formula `speed (m/s) = coefficient * max(TWR - subtract, 0) ^ exponent` (the editor shows km/h, which is m/s times 3.6). The 1.163 game uses `50 * sqrt(TWR - 1)`, which is `coefficient 50, subtract 1, exponent 0.5`. `"preset": "classic"` is the linear 1.151 curve, `25 * TWR`. `"preset": "custom"` uses the three numbers. `max_kmh` caps the speed (`0` is no cap). The game caches each ship's speed, so reopen or edit a ship to see a change, and restart the game after editing the config.
+* **Refuel**: multiplies how fast fleets take fuel at stations (`1.0` is normal; `0` stops refuelling and a negative value drains fuel). A huge value just means "fill up at once"; the amount is still capped by free tank space and station stock. The AI fleets use the same code, so `ai_rate_multiplier` changes how fast they refuel.
+* **Speed**: replaces the map cruise speed formula `speed (m/s) = coefficient * max(TWR - subtract, 0) ^ exponent` (the editor shows km/h, which is m/s times 3.6). The 1.163 game uses `50 * sqrt(TWR - 1)`, which is `coefficient 50, subtract 1, exponent 0.5`. `"preset"` picks the curve: `"vanilla"` (the default) is the game's own curve for the running version, `"classic"` is the linear 1.151 curve `25 * TWR`, `"modern"` is the 1.163 curve, and `"custom"` uses the three numbers. Only 1.163 is supported for now, so `vanilla` is the same as `modern`. `max_kmh` caps the speed (`0` is no cap). The game caches each ship's speed, so reopen or edit a ship to see a change, and restart the game after editing the config.
 
 ## Aircraft settings
 
