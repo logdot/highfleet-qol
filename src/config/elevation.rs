@@ -124,6 +124,18 @@ impl ElevationKeys {
     }
 }
 
+/// Where the elevation readout is shown, for [`ElevationConfig::hint`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ElevationHint {
+    /// Drawn inside the game with the game's own font.
+    Native,
+    /// A separate transparent window above the game.
+    Window,
+    /// No readout.
+    Off,
+}
+
 /// Settings for the `elevation` section of `qol.json`.
 ///
 /// While holding a part in the ship editor you can raise or lower its floor (elevation) by hand.
@@ -145,8 +157,12 @@ pub struct ElevationConfig {
     pub sync_children: bool,
     /// Floor of a mounted module relative to its mount: `0` is the same floor, `1` one above.
     pub child_offset: i32,
-    /// Shows a text readout with the held part, its floor and its mounted modules.
-    pub overlay: bool,
+    /// How the readout with the keys, the held part, its floor and its mounted modules is shown.
+    ///
+    /// `native` draws it inside the game with the game's own font, on the right of the editor.
+    /// `window` uses a separate transparent window above the game instead, which can help if the
+    /// native text does not appear. `off` shows nothing; the keys still work.
+    pub hint: ElevationHint,
     /// Keys used for raising, lowering and returning to automatic elevation.
     pub keys: ElevationKeys,
 }
@@ -158,7 +174,7 @@ impl Default for ElevationConfig {
             max_floor: 3,
             sync_children: true,
             child_offset: 0,
-            overlay: true,
+            hint: ElevationHint::Native,
             keys: ElevationKeys::default(),
         }
     }
@@ -175,8 +191,21 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.max_floor, 3);
         assert!(config.sync_children);
-        assert!(config.overlay);
+        assert_eq!(config.hint, ElevationHint::Native);
         assert_eq!(config.keys.resolve(), ElevationKeys::default().resolve());
+    }
+
+    #[test]
+    fn hint_modes_are_read_by_name() {
+        for (name, mode) in [
+            ("native", ElevationHint::Native),
+            ("window", ElevationHint::Window),
+            ("off", ElevationHint::Off),
+        ] {
+            let json = format!(r#"{{"hint":"{name}"}}"#);
+            let config: ElevationConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(config.hint, mode);
+        }
     }
 
     #[test]

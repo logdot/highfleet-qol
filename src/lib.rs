@@ -163,6 +163,12 @@ unsafe extern "C" fn init() -> bool {
         } else {
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+
+            if config.elevation.enabled {
+                prepare_patch!(elevation::prepare(&mut patch_session, &config.elevation));
+            } else {
+                log::info!("Elevation disabled");
+            }
         }
     }
     #[cfg(feature = "1_151")]
@@ -177,7 +183,7 @@ unsafe extern "C" fn init() -> bool {
 
     #[cfg(not(feature = "1_151"))]
     if config.elevation.enabled && GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
-        elevation::start(&config.elevation);
+        elevation::start();
     }
 
     true

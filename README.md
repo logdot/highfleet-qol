@@ -93,7 +93,7 @@ Lets you raise and lower the elevation (floor) of the part you hold in the ship 
     "max_floor": 3,
     "sync_children": true,
     "child_offset": 0,
-    "overlay": true,
+    "hint": "native",
     "keys": { "raise": "U", "lower": "P", "auto": "Backslash" }
   }
 }
@@ -101,7 +101,7 @@ Lets you raise and lower the elevation (floor) of the part you hold in the ship 
 
 * While holding a part, `raise` and `lower` change its floor by one. `auto` gives it back to the game's automatic elevation (then drop the part so the game recomputes it).
 * `sync_children`: mounted modules (guns and similar) follow the part. `child_offset` is their floor relative to the mount (`0` same floor, `1` one above).
-* `overlay`: shows a small text readout with the keys, the held part, its floor and its mounted modules. It is a transparent window above the game.
+* `hint`: the readout with the keys, the held part, its floor and its mounted modules. `"native"` (default) draws it inside the game on the right of the editor, in the game's own font. `"window"` shows it in a separate transparent window above the game instead (use it if the native text does not appear, for example with another mod that changes the editor). `"off"` shows nothing; the keys still work. The keys only react while the game window has the keyboard focus.
 * Keys are a single letter or digit, `F1` to `F12`, or a name: `Backslash`, `Tab`, `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket`, `RightBracket`. Write `Backslash` rather than `"\\"`. An unknown name is reported in the log and that key keeps its default.
 
 ## Aircraft settings

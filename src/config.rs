@@ -15,7 +15,7 @@ mod plane;
 mod refuel;
 mod speed;
 
-pub use elevation::{parse_key, ElevationConfig, ElevationKeys, ResolvedKeys};
+pub use elevation::{parse_key, ElevationConfig, ElevationHint, ElevationKeys, ResolvedKeys};
 pub use loadout::{ConfigItemMunition, ConfigLoadout};
 pub use plane::{ConfigPlane, DEFAULT_PLANE_HEALTH};
 pub use refuel::RefuelConfig;
