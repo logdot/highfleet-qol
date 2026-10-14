@@ -46,6 +46,31 @@ The list of toggles is:
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
 
+## Refuel rate and speed curve (1.163 only)
+
+Both are off by default and have their own section in `qol.json`. They only do anything on Steam 1.163. On 1.151 they are ignored and a warning is logged. Existing config files do not need to change; if a section is missing the feature stays off. The config file is only generated when it does not exist, so add these sections by hand:
+
+```json
+{
+  "refuel": {
+    "enabled": true,
+    "player_rate_multiplier": 4.0,
+    "ai_rate_multiplier": 1.0
+  },
+  "speed": {
+    "enabled": true,
+    "preset": "classic",
+    "coefficient": 25.0,
+    "subtract": 0.0,
+    "exponent": 1.0,
+    "max_kmh": 0
+  }
+}
+```
+
+* **Refuel**: multiplies how fast fleets take fuel at stations (`1.0` is normal, limited to `0.01` through `10000`). A huge value just means "fill up at once"; the amount is still capped by free tank space and station stock. The AI fleets use the same code, so `ai_rate_multiplier` changes how fast they refuel.
+* **Speed**: replaces the map cruise speed formula `speed (m/s) = coefficient * max(TWR - subtract, 0) ^ exponent` (the editor shows km/h, which is m/s times 3.6). The 1.163 game uses `50 * sqrt(TWR - 1)`, which is `coefficient 50, subtract 1, exponent 0.5`. `"preset": "classic"` is the linear 1.151 curve, `25 * TWR`. `"preset": "custom"` uses the three numbers. `max_kmh` caps the speed (`0` is no cap). The game caches each ship's speed, so reopen or edit a ship to see a change, and restart the game after editing the config.
+
 ## Aircraft settings
 
 Each entry in `planes` can set the aircraft's health and available loadouts. The generated configuration contains the correct internal aircraft names to edit:

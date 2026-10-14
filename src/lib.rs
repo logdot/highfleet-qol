@@ -5,6 +5,7 @@
 highfleet_mod_api::export_logger!();
 
 use std::ffi::{c_char, CStr};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::Config;
 
@@ -16,12 +17,21 @@ mod parts;
 mod plane;
 mod plane_guns;
 mod plane_health;
+#[cfg(not(feature = "1_151"))]
+mod refuel;
 mod rng;
 mod sell_multiplier;
 mod shake;
+#[cfg(not(feature = "1_151"))]
+mod speed;
 mod structs;
 mod ttl;
 mod zoom;
+
+/// Set by [`version`] when the game is Steam 1.163. Features that only exist for that version
+/// stay untouched unless this is set, because the modloader still calls `init` after `version`
+/// reports an unsupported game.
+static GAME_IS_STEAM_1_163: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
@@ -141,6 +151,31 @@ unsafe extern "C" fn init() -> bool {
         config.sell_multiplier
     ));
 
+    #[cfg(not(feature = "1_151"))]
+    {
+        if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
+            if config.refuel.enabled || config.speed.enabled {
+                log::warn!("Refuel rate and speed curve need Steam 1.163, leaving them off");
+            }
+        } else {
+            if config.refuel.enabled {
+                prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
+            } else {
+                log::info!("Refuel rate disabled");
+            }
+
+            if config.speed.enabled {
+                prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+            } else {
+                log::info!("Speed curve disabled");
+            }
+        }
+    }
+    #[cfg(feature = "1_151")]
+    if config.refuel.enabled || config.speed.enabled {
+        log::warn!("Refuel rate and speed curve are not available on 1.151, leaving them off");
+    }
+
     if let Err(error) = patch_session.install_permanently() {
         log::error!("Unable to install prepared patches: {error}");
         return false;
@@ -152,6 +187,7 @@ unsafe extern "C" fn init() -> bool {
 #[no_mangle]
 unsafe extern "C" fn version(version: *const c_char) -> bool {
     let version = CStr::from_ptr(version).to_str().unwrap();
+    GAME_IS_STEAM_1_163.store(version == "Steam 1.163", Ordering::Relaxed);
     if cfg!(feature = "1_151") {
         version == "Steam 1.151"
     } else if cfg!(feature = "1_163") {
