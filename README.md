@@ -48,7 +48,20 @@ The list of toggles is:
 
 ## Refuel rate and speed curve (1.163 only)
 
-Both are off by default and have their own section in `qol.json`. They only do anything on Steam 1.163. On 1.151 they are ignored and a warning is logged. Existing config files do not need to change; if a section is missing the feature stays off. The config file is only generated when it does not exist, so add these sections by hand:
+Two optional changes for the strategic map. Both are **off by default**, each has its own section in `qol.json`, and they only do anything on Steam 1.163 (on 1.151 they are ignored and a warning is logged).
+
+* **Refuel rate**: fleets take fuel from a station faster (or slower).
+* **Speed curve**: changes how fast a fleet cruises on the map for a given thrust-to-weight ratio (TWR) of its ships.
+
+### Turning them on, step by step
+
+1. Start the game once with the mod installed. This creates `Modloader/config/qol.json` with a `refuel` and a `speed` section (both `"enabled": false`). If your `qol.json` already existed from an older version, it is not rewritten: add the sections below by hand. A missing section simply means the feature stays off.
+2. Close the game, open `Modloader/config/qol.json` and set `"enabled": true` in the section you want, plus the numbers (example below).
+3. Start the game. Settings are read once at start-up, so restart after every change.
+4. Check `Modloader/logs/Highfleet_<date>.log`. A working setup logs lines like `Refuel rate patch prepared at 0x14011521f (200 -> 2000)` and `Speed curve patch prepared at 0x140080699 (50 * max(TWR - 0, 0) ^ 1)`. If a value is out of range the log says so and the feature stays off.
+5. Refuel: dock at a station with a part-empty tank and watch the fuel gauge. Speed: open a ship in the editor (or launch a fleet). The game caches each ship's speed, so reopen or edit the ship to see the new number.
+
+If you used the standalone `refuel.dll` or `speed.dll` mods, remove them: both patch the same game code, and this section replaces them (`refuel.ini` and the old speed settings are no longer read).
 
 ```json
 {
