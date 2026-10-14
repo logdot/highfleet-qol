@@ -110,7 +110,7 @@ const OFF_FONT_SCALE: usize = 0x100c;
 const OFF_FONT_COLOR: usize = 0x1020;
 const OFF_FONT_BLEND: usize = 0x1028;
 
-/// A small monospace pixel-style font from the game's own list (see hf_notes docs/findings/fonts.md).
+/// A small monospace pixel-style font from the game's own list (see hf_notes, fonts.md).
 const HINT_FONT: &CStr = c"fixed_16";
 /// Opaque white (`0xAARRGGBB`).
 const HINT_COLOR: u32 = 0xffff_ffff;
