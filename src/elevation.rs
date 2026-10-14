@@ -110,8 +110,8 @@ const OFF_FONT_SCALE: usize = 0x100c;
 const OFF_FONT_COLOR: usize = 0x1020;
 const OFF_FONT_BLEND: usize = 0x1028;
 
-/// The font most of the editor's own labels use.
-const HINT_FONT: &CStr = c"dinpro_14_bold";
+/// A small monospace pixel-style font from the game's own list (see hf_notes docs/findings/fonts.md).
+const HINT_FONT: &CStr = c"fixed_16";
 /// Opaque white (`0xAARRGGBB`).
 const HINT_COLOR: u32 = 0xffff_ffff;
 /// Normal alpha blending (`BLEND_DEFAULT`).
