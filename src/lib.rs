@@ -15,6 +15,8 @@ compile_error!("select at most one of the `1_151` and `1_163` features");
 pub mod config;
 mod dumpable;
 #[cfg(not(feature = "1_151"))]
+mod elevation;
+#[cfg(not(feature = "1_151"))]
 mod elevation_rules;
 #[cfg(not(feature = "1_151"))]
 mod enemy_laser_warning;
@@ -206,10 +208,19 @@ unsafe extern "C" fn init() -> bool {
             config.elevation_rules
         ));
     }
+    #[cfg(feature = "1_151")]
+    if config.elevation.enabled {
+        log::warn!("Elevation is not available on 1.151, leaving it off");
+    }
 
     if let Err(error) = patch_session.install_permanently() {
         log::error!("Unable to install prepared patches: {error}");
         return false;
+    }
+
+    #[cfg(not(feature = "1_151"))]
+    if config.elevation.enabled && GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
+        elevation::start(&config.elevation);
     }
 
     true
