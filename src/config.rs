@@ -11,9 +11,13 @@ use serde::{de::Deserializer, Deserialize, Serialize};
 
 mod loadout;
 mod plane;
+mod refuel;
+mod speed;
 
 pub use loadout::{ConfigItemMunition, ConfigLoadout};
 pub use plane::{ConfigPlane, DEFAULT_PLANE_HEALTH};
+pub use refuel::RefuelConfig;
+pub use speed::{SpeedConfig, SpeedCurve, SpeedPreset};
 
 use crate::plane as plane_runtime;
 
@@ -82,6 +86,16 @@ pub struct Config {
     /// `1.0` gives the normal amount, `2.0` doubles it, and `0.5` halves it.
     #[serde(default = "default_sell_multiplier")]
     pub sell_multiplier: f32,
+    /// Changes how fast fleets refuel at stations. Only has an effect on Steam 1.163.
+    ///
+    /// Uses the game's own rate by default.
+    #[serde(default)]
+    pub refuel: RefuelConfig,
+    /// Changes the map cruise-speed formula. Only has an effect on Steam 1.163.
+    ///
+    /// Uses the game's own curve by default.
+    #[serde(default)]
+    pub speed: SpeedConfig,
 }
 
 /// Controls how often and in what quantity one part can appear in city shops.
@@ -169,6 +183,8 @@ impl Default for Config {
             enable_shop_parts: false,
             shop_parts: HashMap::new(),
             sell_multiplier: 1.0,
+            refuel: RefuelConfig::default(),
+            speed: SpeedConfig::default(),
         }
     }
 }
@@ -200,5 +216,49 @@ impl Config {
         std::fs::write(path, config_str)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `qol.json` written before the `refuel` and `speed` sections existed.
+    const OLD_CONFIG: &str = r#"{
+        "enable_anti_wobble": false,
+        "enable_unblocked_guns": false,
+        "enable_reduced_shake": true,
+        "enable_arcade_zoom": true,
+        "max_zoom_level": 5,
+        "min_zoom_level": 3,
+        "zoom_levels": [14.0, 7.0, 1.0, 0.7, 0.5, 0.3],
+        "planes": {},
+        "enable_shop_parts": false
+    }"#;
+
+    #[test]
+    fn config_without_refuel_and_speed_sections_still_loads() {
+        let config: Config = serde_json::from_str(OLD_CONFIG).unwrap();
+
+        assert!(config.enable_reduced_shake);
+        assert_eq!(config.refuel.player_rate_multiplier, 1.0);
+        assert_eq!(config.speed.preset, SpeedPreset::Vanilla);
+    }
+
+    #[test]
+    fn refuel_and_speed_sections_are_read() {
+        let json = OLD_CONFIG.replacen(
+            "\"planes\"",
+            r#""refuel": {"player_rate_multiplier": 4.0},
+        "speed": {"preset": "custom", "exponent": 0.75},
+        "planes""#,
+            1,
+        );
+        let config: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config.refuel.player_rate_multiplier, 4.0);
+        assert_eq!(config.refuel.ai_rate_multiplier, 1.0);
+        assert_eq!(config.speed.preset, SpeedPreset::Custom);
+        assert_eq!(config.speed.exponent, 0.75);
     }
 }
