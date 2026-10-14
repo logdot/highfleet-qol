@@ -9,11 +9,13 @@ use std::{collections::HashMap, error::Error};
 use highfleet::general::EscadraString;
 use serde::{de::Deserializer, Deserialize, Serialize};
 
+mod elevation;
 mod loadout;
 mod plane;
 mod refuel;
 mod speed;
 
+pub use elevation::{parse_key, ElevationConfig, ElevationKeys, ResolvedKeys};
 pub use loadout::{ConfigItemMunition, ConfigLoadout};
 pub use plane::{ConfigPlane, DEFAULT_PLANE_HEALTH};
 pub use refuel::RefuelConfig;
@@ -96,6 +98,12 @@ pub struct Config {
     /// Uses the game's own curve by default.
     #[serde(default)]
     pub speed: SpeedConfig,
+    /// Lets you raise and lower the elevation of the part held in the ship editor.
+    /// Only has an effect on Steam 1.163.
+    ///
+    /// Disabled by default.
+    #[serde(default)]
+    pub elevation: ElevationConfig,
 }
 
 /// Controls how often and in what quantity one part can appear in city shops.
@@ -185,6 +193,7 @@ impl Default for Config {
             sell_multiplier: 1.0,
             refuel: RefuelConfig::default(),
             speed: SpeedConfig::default(),
+            elevation: ElevationConfig::default(),
         }
     }
 }
@@ -243,6 +252,7 @@ mod tests {
         assert!(config.enable_reduced_shake);
         assert_eq!(config.refuel.player_rate_multiplier, 1.0);
         assert_eq!(config.speed.preset, SpeedPreset::Vanilla);
+        assert!(!config.elevation.enabled);
     }
 
     #[test]
