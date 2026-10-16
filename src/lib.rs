@@ -11,6 +11,8 @@ use crate::config::Config;
 
 pub mod config;
 mod dumpable;
+#[cfg(not(feature = "1_151"))]
+mod elevation;
 mod flare_crash;
 mod guns;
 mod parts;
@@ -154,16 +156,34 @@ unsafe extern "C" fn init() -> bool {
     #[cfg(not(feature = "1_151"))]
     {
         if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
+            if config.elevation.enabled {
+                log::warn!("Elevation needs Steam 1.163, leaving it off");
+            }
             log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
         } else {
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+
+            if config.elevation.enabled {
+                prepare_patch!(elevation::prepare(&mut patch_session, &config.elevation));
+            } else {
+                log::info!("Elevation disabled");
+            }
         }
+    }
+    #[cfg(feature = "1_151")]
+    if config.elevation.enabled {
+        log::warn!("Elevation is not available on 1.151, leaving it off");
     }
 
     if let Err(error) = patch_session.install_permanently() {
         log::error!("Unable to install prepared patches: {error}");
         return false;
+    }
+
+    #[cfg(not(feature = "1_151"))]
+    if config.elevation.enabled && GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
+        elevation::start();
     }
 
     true
