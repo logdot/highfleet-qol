@@ -2,6 +2,15 @@
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
+## Building from source
+
+Initialize the `highfleet-rs` submodule before building with Cargo.
+For a fresh clone, use `git clone --recurse-submodules https://github.com/logdot/highfleet-qol.git`.
+For an existing checkout, use `git submodule update --init --recursive`.
+Cargo uses the local submodule through a path dependency, and the submodule pins the shared library revision.
+
+## Installation
+
 To install, download the mod from [releases](https://github.com/logdot/highfleet-qol/releases/latest).
 The zip has two folders, one each for the 1.151 and 1.163 versions of the game.
 Open the respective folder for your version.
