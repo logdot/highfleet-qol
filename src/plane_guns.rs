@@ -251,22 +251,10 @@ unsafe fn find_ammo_definition(ammo_name: &str) -> Option<FoundAmmo> {
     None
 }
 
-#[cfg(feature = "1_151")]
-fn ammo_gun_rate(ammo: &Ammo) -> f32 {
-    ammo.unknown_158h
-}
-
-#[cfg(not(feature = "1_151"))]
 fn ammo_gun_rate(ammo: &Ammo) -> f32 {
     ammo.fire_delay
 }
 
-#[cfg(feature = "1_151")]
 fn ammo_max_load(ammo: &Ammo) -> i32 {
-    ammo.unknown_15ch
-}
-
-#[cfg(not(feature = "1_151"))]
-fn ammo_max_load(ammo: &Ammo) -> i32 {
-    ammo.unknown_180h
+    ammo.salvo_size
 }

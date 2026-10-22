@@ -1,11 +1,11 @@
 use std::{collections::HashMap, hash::Hash};
 
-use highfleet::general::EscadraString;
+use highfleet::general::{CVec, EscadraString, TllContainer};
 use serde::Serialize;
 
 use crate::{
     config::{ConfigLoadout, ConfigPlane},
-    structs::{cvec::CVec, loadout::GameLoadout, plane::Plane, tll::TllContainer},
+    structs::{loadout::GameLoadout, plane::Plane},
 };
 
 fn get_plane_tll_addr() -> u64 {
@@ -112,6 +112,8 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
         new_planes.insert(plane_name.clone(), plane);
     }
 
+    // Transfer ownership of the headers without dropping the new containers.
+    // Do not reclaim the previous game-owned trees through Rust's libc cleanup.
     // Write loadouts to game's loadout TLL
     let loadout_tll_ptr: *mut TllContainer<EscadraString, GameLoadout> =
         get_loadout_tll_addr() as *mut TllContainer<EscadraString, GameLoadout>;
@@ -126,24 +128,20 @@ pub unsafe fn patch_planes(planes: &HashMap<EscadraString, ConfigPlane>) {
     read_tll(plane_tll_ptr);
 }
 
-unsafe fn read_tll<T: Eq + Hash + Serialize, U: Serialize>(tll_ptr: *const TllContainer<T, U>) {
-    let tll_container = &*tll_ptr;
-    if tll_container.size == 0 {
+unsafe fn read_tll<T: Eq + Hash + Serialize, U: Serialize>(tll_ptr: *mut TllContainer<T, U>) {
+    let tll_container = &mut *tll_ptr;
+    if tll_container.is_empty() {
         log::warn!("Loadout TLL container is empty.");
         return;
     }
 
-    let sentinel_ptr = tll_container.sentinel;
+    let sentinel_ptr = tll_container.sentinel();
     if sentinel_ptr.is_null() {
         log::warn!("Loadout TLL sentinel is null.");
         return;
     }
 
-    let sentinel = &mut *sentinel_ptr;
-
-    let items = HashMap::from(sentinel);
-
-    // let items = Vec::from(sentinel);
+    let items = tll_container.get_map();
     let items_str = serde_json::to_string_pretty(&items).unwrap();
     log::info!("{}", items_str);
 }

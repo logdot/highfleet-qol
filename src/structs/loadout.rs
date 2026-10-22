@@ -1,7 +1,5 @@
-use highfleet::general::EscadraString;
+use highfleet::general::{CVec, EscadraString};
 use serde::Serialize;
-
-use crate::structs::cvec::CVec;
 
 #[repr(C)]
 #[derive(Debug, Clone, Serialize)]
