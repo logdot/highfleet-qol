@@ -1,10 +1,7 @@
-use highfleet::general::EscadraString;
+use highfleet::general::{CVec, EscadraString};
 use serde::{de::Deserializer, Deserialize, Serialize};
 
-use crate::structs::{
-    cvec::CVec,
-    loadout::{GameItemMunition, GameLoadout},
-};
+use crate::structs::loadout::{GameItemMunition, GameLoadout};
 
 const LEGACY_GUN_AMMO: &str = "ITEM_GUN37";
 

@@ -2,9 +2,13 @@
 
 use std::{arch::naked_asm, collections::HashMap, slice, sync::OnceLock};
 
+#[cfg(feature = "1_151")]
+use highfleet::v1_151::Body;
+#[cfg(not(feature = "1_151"))]
+use highfleet::v1_163::Body;
 use patchy::{PatchSession, Result, ReturnType};
 
-use crate::{config::DEFAULT_PLANE_HEALTH, structs::aircraft_body::AircraftBody};
+use crate::config::DEFAULT_PLANE_HEALTH;
 
 const ORIGINAL_BYTES: [u8; 6] = [0x8b, 0x8e, 0x88, 0x01, 0x00, 0x00];
 
@@ -70,8 +74,8 @@ pub unsafe fn patch_plane_health(session: &mut PatchSession) -> Result {
     Ok(())
 }
 
-/// At the hook site RSI contains the aircraft body. The overwritten instruction is
-/// replayed before this bridge runs, and patchy restores its ECX result afterward.
+/// At the hook site RSI contains the aircraft's ordinary Body.
+/// The overwritten instruction is replayed before this bridge runs, and patchy restores its ECX result afterward.
 #[unsafe(naked)]
 unsafe extern "C" fn apply_plane_health_bridge() {
     naked_asm!(
@@ -81,7 +85,7 @@ unsafe extern "C" fn apply_plane_health_bridge() {
     );
 }
 
-unsafe extern "C" fn apply_plane_health(aircraft: *mut AircraftBody) {
+unsafe extern "C" fn apply_plane_health(aircraft: *mut Body) {
     if aircraft.is_null() {
         return;
     }
@@ -89,17 +93,17 @@ unsafe extern "C" fn apply_plane_health(aircraft: *mut AircraftBody) {
     let aircraft = &mut *aircraft;
     let Some(&health) = PLANE_HEALTH
         .get()
-        .and_then(|planes| planes.get(aircraft.plane_name.get_string()))
+        .and_then(|planes| planes.get(aircraft.oid.get_string()))
     else {
         return;
     };
 
     aircraft.health = health;
-    aircraft.max_health = health;
+    aircraft.health_max = health;
 
     log::debug!(
         "plane_health: configured plane '{}' with {health} health",
-        aircraft.plane_name.get_string()
+        aircraft.oid.get_string()
     );
 }
 
@@ -110,6 +114,22 @@ fn is_valid_health(health: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_body_fields_match_aircraft_health_hook_offsets() {
+        use std::mem::{align_of, offset_of};
+
+        #[cfg(feature = "1_151")]
+        let health_offset = 0x2b8;
+        #[cfg(not(feature = "1_151"))]
+        let health_offset = 0x2c8;
+
+        // The native aircraft identifier is Body's serialized m_oid, not Node's m_name.
+        assert_eq!(offset_of!(Body, oid), 0x190);
+        assert_eq!(offset_of!(Body, health), health_offset);
+        assert_eq!(offset_of!(Body, health_max), health_offset + 4);
+        assert_eq!(align_of::<Body>(), 8);
+    }
 
     #[test]
     fn accepts_positive_finite_health() {
