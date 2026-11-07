@@ -23,6 +23,8 @@ mod rng;
 mod sell_multiplier;
 mod shake;
 #[cfg(not(feature = "1_151"))]
+mod shrapnel;
+#[cfg(not(feature = "1_151"))]
 mod speed;
 mod structs;
 mod ttl;
@@ -158,6 +160,7 @@ unsafe extern "C" fn init() -> bool {
         } else {
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+            prepare_patch!(shrapnel::patch_shrapnel_size(&mut patch_session));
         }
     }
 
