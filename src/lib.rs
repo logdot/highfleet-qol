@@ -23,6 +23,8 @@ mod rng;
 mod sell_multiplier;
 mod shake;
 #[cfg(not(feature = "1_151"))]
+mod shootable_gui;
+#[cfg(not(feature = "1_151"))]
 mod shrapnel;
 #[cfg(not(feature = "1_151"))]
 mod speed;
@@ -156,12 +158,19 @@ unsafe extern "C" fn init() -> bool {
     #[cfg(not(feature = "1_151"))]
     {
         if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
-            log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
+            log::info!("Steam 1.163-only patches are disabled for this game version");
         } else {
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
             prepare_patch!(shrapnel::patch_shrapnel_size(&mut patch_session));
+            if config.enable_shootable_gui {
+                prepare_patch!(shootable_gui::patch_shootable_gui(&mut patch_session));
+            }
         }
+    }
+    #[cfg(feature = "1_151")]
+    if config.enable_shootable_gui {
+        log::warn!("Shootable GUI requires Steam 1.163; leaving the interface unchanged");
     }
 
     if let Err(error) = patch_session.install_permanently() {

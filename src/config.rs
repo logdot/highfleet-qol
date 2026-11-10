@@ -49,6 +49,16 @@ pub struct Config {
     /// Disabled by default.
     #[serde(default)]
     pub enable_unblocked_ttl: bool,
+    /// Lets projectiles collide with the game's own GUI elements during tactical battles.
+    ///
+    /// The GUI elements are not replaced or backed by stand-in objects: each one's existing
+    /// body gains collision and hit points, so every eligible element can be shot, including
+    /// menus and other interface elements visible on the battle screen.
+    ///
+    /// Only has an effect on Steam 1.163. Disabled by default; this is an experimental
+    /// prototype whose battle behaviour has not been validated in play.
+    #[serde(default)]
+    pub enable_shootable_gui: bool,
     /// Enables configurable zoom levels during combat.
     ///
     /// Enabled by default.
@@ -175,6 +185,7 @@ impl Default for Config {
             enable_reduced_shake: false,
             enable_flare_crash_fix: true,
             enable_unblocked_ttl: false,
+            enable_shootable_gui: false,
             enable_arcade_zoom: true,
             max_zoom_level: 5,
             min_zoom_level: 3,
@@ -223,7 +234,8 @@ impl Config {
 mod tests {
     use super::*;
 
-    /// A `qol.json` written before the `refuel` and `speed` sections existed.
+    /// A `qol.json` written before the `refuel`, `speed`, and
+    /// `enable_shootable_gui` entries existed.
     const OLD_CONFIG: &str = r#"{
         "enable_anti_wobble": false,
         "enable_unblocked_guns": false,
@@ -243,6 +255,26 @@ mod tests {
         assert!(config.enable_reduced_shake);
         assert_eq!(config.refuel.player_rate_multiplier, 1.0);
         assert_eq!(config.speed.preset, SpeedPreset::Vanilla);
+    }
+
+    #[test]
+    fn shootable_gui_is_disabled_for_configs_written_before_it_existed() {
+        let config: Config = serde_json::from_str(OLD_CONFIG).unwrap();
+
+        assert!(!config.enable_shootable_gui);
+    }
+
+    #[test]
+    fn shootable_gui_is_enabled_when_configured() {
+        let json = OLD_CONFIG.replacen(
+            r#""enable_shop_parts""#,
+            r#""enable_shootable_gui": true,
+        "enable_shop_parts""#,
+            1,
+        );
+        let config: Config = serde_json::from_str(&json).unwrap();
+
+        assert!(config.enable_shootable_gui);
     }
 
     #[test]
