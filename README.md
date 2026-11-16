@@ -1,4 +1,9 @@
 # Highfleet QOL
+
+On Steam 1.163, set `"enemy_laser_warning": false` in `qol.json` to hide
+enemy gun pre-fire warning lines, and `"enemy_sound_warning": false` to mute
+the enemy pre-fire sound. Both default to `true` and work independently;
+friendly lines remain.
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 

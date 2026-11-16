@@ -11,6 +11,8 @@ use crate::config::Config;
 
 pub mod config;
 mod dumpable;
+#[cfg(not(feature = "1_151"))]
+mod enemy_laser_warning;
 mod flare_crash;
 mod guns;
 mod parts;
@@ -156,6 +158,14 @@ unsafe extern "C" fn init() -> bool {
         if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
             log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
         } else {
+            if !config.enemy_laser_warning {
+                prepare_patch!(enemy_laser_warning::prepare(&mut patch_session));
+            }
+            if !config.enemy_sound_warning {
+                prepare_patch!(enemy_laser_warning::prepare_sound_suppression(
+                    &mut patch_session
+                ));
+            }
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
         }
