@@ -14,6 +14,9 @@ use windows_sys::Win32::System::Memory::{
 
 const DRAW_WORLD_LINE: usize = 0x140248ba0;
 const IMAGE_BASE: usize = 0x140000000;
+// BattleHud_DrawCombatMarkers calls playSFXSound_ with "alarm_small_09" here.
+const SOUND_CALL: usize = 0x14029e119;
+const SOUND_CALL_ORIGINAL: [u8; 5] = [0xe8, 0xc2, 0x4f, 0x04, 0x00];
 const SITES: [(usize, [u8; 5]); 2] = [
     (0x14029d664, [0xe8, 0x37, 0xb5, 0xfa, 0xff]),
     (0x14029d956, [0xe8, 0x45, 0xb2, 0xfa, 0xff]),
@@ -40,6 +43,20 @@ pub unsafe fn prepare(session: &mut PatchSession) -> Result {
         unsafe { session.detour_trampoline(address, 5, trampoline)? };
     }
     log::info!("Prepared enemy pre-fire laser warning suppression");
+    Ok(())
+}
+
+/// Suppress the enemy pre-fire alarm without changing the warning state.
+pub unsafe fn prepare_sound_suppression(session: &mut PatchSession) -> Result {
+    if !matches_executable_bytes(SOUND_CALL, &SOUND_CALL_ORIGINAL) {
+        return Err(PatchError::SourceChanged {
+            address: SOUND_CALL,
+        });
+    }
+    // SAFETY: The verified instruction is a complete five-byte sound call.
+    // Its return value is unused; the original warning-state update follows it.
+    unsafe { session.overwrite(SOUND_CALL, &[0x90; 5])? };
+    log::info!("Prepared enemy pre-fire sound warning suppression");
     Ok(())
 }
 

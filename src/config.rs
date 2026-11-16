@@ -47,6 +47,9 @@ pub struct Config {
     /// Show enemy pre-fire gun warning lines. Enabled by default, Steam 1.163 only.
     #[serde(default = "default_flare_crash_fix")]
     pub enemy_laser_warning: bool,
+    /// Play the enemy pre-fire sound warning. Enabled by default; Steam 1.163 only.
+    #[serde(default = "default_flare_crash_fix")]
+    pub enemy_sound_warning: bool,
     /// Stops armor-piercing projectiles from being forced to a shorter lifetime.
     ///
     /// Disabled by default.
@@ -178,6 +181,7 @@ impl Default for Config {
             enable_reduced_shake: false,
             enable_flare_crash_fix: true,
             enemy_laser_warning: true,
+            enemy_sound_warning: true,
             enable_unblocked_ttl: false,
             enable_arcade_zoom: true,
             max_zoom_level: 5,
