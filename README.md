@@ -1,4 +1,8 @@
 # Highfleet QOL
+
+On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native
+startup logos. After the first second, a fresh key press or mouse click skips
+them. Remove the standalone hf_intro DLL before enabling this option.
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
