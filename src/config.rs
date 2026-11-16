@@ -9,11 +9,13 @@ use std::{collections::HashMap, error::Error};
 use highfleet::general::EscadraString;
 use serde::{de::Deserializer, Deserialize, Serialize};
 
+mod elevation_rules;
 mod loadout;
 mod plane;
 mod refuel;
 mod speed;
 
+pub use elevation_rules::ElevationRules;
 pub use loadout::{ConfigItemMunition, ConfigLoadout};
 pub use plane::{ConfigPlane, DEFAULT_PLANE_HEALTH};
 pub use refuel::RefuelConfig;
@@ -96,6 +98,13 @@ pub struct Config {
     /// Uses the game's own curve by default.
     #[serde(default)]
     pub speed: SpeedConfig,
+    /// Chooses the firing-arc rules: `vanilla` (the game's own), `classic` (the 1.151 rules:
+    /// free-standing parts do not block guns on the same height level, and the KAZ module
+    /// is less strict) or `modern` (the 1.163 rules). Only has an effect on Steam 1.163.
+    ///
+    /// Uses the game's own rules by default.
+    #[serde(default)]
+    pub elevation_rules: ElevationRules,
 }
 
 /// Controls how often and in what quantity one part can appear in city shops.
@@ -185,6 +194,7 @@ impl Default for Config {
             sell_multiplier: 1.0,
             refuel: RefuelConfig::default(),
             speed: SpeedConfig::default(),
+            elevation_rules: ElevationRules::default(),
         }
     }
 }

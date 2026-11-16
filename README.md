@@ -1,4 +1,14 @@
 # Highfleet QOL
+
+## Elevation rules (Steam 1.163)
+
+Set `"elevation_rules": "classic"` to use the Steam 1.151 firing-arc rules:
+free-standing parts do not block same-level guns, and the KAZ uses its older,
+wider targeting cone and covered test. `"vanilla"` (default) and `"modern"`
+leave the 1.163 rules unchanged.
+
+The fork's `classic_kaz` truss exemption is deliberately omitted from this
+proposal: its sector scanning is performance-inefficient.
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
