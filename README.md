@@ -1,14 +1,5 @@
 # Highfleet QOL
 
-## Elevation rules (Steam 1.163)
-
-Set `"elevation_rules": "classic"` to use the Steam 1.151 firing-arc rules:
-free-standing parts do not block same-level guns, and the KAZ uses its older,
-wider targeting cone and covered test. `"vanilla"` (default) and `"modern"`
-leave the 1.163 rules unchanged.
-
-The fork's `classic_kaz` truss exemption is deliberately omitted from this
-proposal: its sector scanning is performance-inefficient.
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
@@ -64,6 +55,9 @@ The list of toggles is:
      * Max Zoom: The maximum zoom level.
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
+6. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules for free-standing parts and KAZ targeting.
+   Free-standing parts do not block same-level guns, and KAZ uses its older, wider targeting cone and covered test.
+   The default `"vanilla"` and `"modern"` leave the 1.163 rules unchanged.
 
 ## Refuel rate and speed curve (1.163 only)
 

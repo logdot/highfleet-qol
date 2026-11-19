@@ -98,11 +98,10 @@ pub struct Config {
     /// Uses the game's own curve by default.
     #[serde(default)]
     pub speed: SpeedConfig,
-    /// Chooses the firing-arc rules: `vanilla` (the game's own), `classic` (the 1.151 rules:
-    /// free-standing parts do not block guns on the same height level, and the KAZ module
-    /// is less strict) or `modern` (the 1.163 rules). Only has an effect on Steam 1.163.
-    ///
-    /// Uses the game's own rules by default.
+    /// Chooses the firing-arc rules on Steam 1.163.
+    /// `classic` restores the 1.151 rules for free-standing parts and KAZ targeting.
+    /// `modern` uses the 1.163 rules, which make those checks stricter; it does not enable blocked guns.
+    /// `vanilla` uses the game's own rules and is the default.
     #[serde(default)]
     pub elevation_rules: ElevationRules,
 }
