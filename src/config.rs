@@ -46,6 +46,10 @@ pub struct Config {
     /// Enabled by default. Version 1.151 does not require this fix.
     #[serde(default = "default_flare_crash_fix")]
     pub enable_flare_crash_fix: bool,
+    /// Restore the native intro, skippable with a fresh key press or click.
+    /// Steam 1.163 only; disabled by default.
+    #[serde(default)]
+    pub enable_intro: bool,
     /// Stops armor-piercing projectiles from being forced to a shorter lifetime.
     ///
     /// Disabled by default.
@@ -182,6 +186,7 @@ impl Default for Config {
             enable_unblocked_guns: false,
             enable_reduced_shake: false,
             enable_flare_crash_fix: true,
+            enable_intro: false,
             enable_unblocked_ttl: false,
             enable_arcade_zoom: true,
             max_zoom_level: 5,

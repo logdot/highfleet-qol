@@ -15,6 +15,8 @@ mod dumpable;
 mod elevation_rules;
 mod flare_crash;
 mod guns;
+#[cfg(not(feature = "1_151"))]
+mod intro;
 mod parts;
 mod plane;
 mod plane_guns;
@@ -158,6 +160,9 @@ unsafe extern "C" fn init() -> bool {
         if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
             log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
         } else {
+            if config.enable_intro {
+                prepare_patch!(intro::prepare(&mut patch_session));
+            }
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
             prepare_patch!(elevation_rules::patch_elevation_rules(

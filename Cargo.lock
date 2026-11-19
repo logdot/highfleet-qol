@@ -96,6 +96,7 @@ dependencies = [
  "patchy-rs",
  "serde",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]

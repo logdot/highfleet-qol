@@ -31,6 +31,7 @@ This is what the file looks like by default:
   "enable_unblocked_guns": false,
   "enable_reduced_shake": false,
   "enable_flare_crash_fix": true,
+  "enable_intro": false,
   "enable_arcade_zoom": true,
   "max_zoom_level": 5,
 
@@ -58,6 +59,9 @@ The list of toggles is:
 6. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules for free-standing parts and KAZ targeting.
    Free-standing parts do not block same-level guns, and KAZ uses its older, wider targeting cone and covered test.
    The default `"vanilla"` and `"modern"` leave the 1.163 rules unchanged.
+7. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
+   After the first second, a fresh key press or mouse click skips them.
+   Remove the standalone hf_intro DLL before enabling this option.
 
 ## Refuel rate and speed curve (1.163 only)
 
