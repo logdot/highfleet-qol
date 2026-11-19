@@ -11,6 +11,8 @@ use crate::config::Config;
 
 pub mod config;
 mod dumpable;
+#[cfg(not(feature = "1_151"))]
+mod elevation_rules;
 mod flare_crash;
 mod guns;
 #[cfg(not(feature = "1_151"))]
@@ -163,6 +165,10 @@ unsafe extern "C" fn init() -> bool {
             }
             prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
             prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+            prepare_patch!(elevation_rules::patch_elevation_rules(
+                &mut patch_session,
+                config.elevation_rules
+            ));
         }
     }
 
