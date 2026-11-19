@@ -1,4 +1,5 @@
 # Highfleet QOL
+
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
@@ -30,6 +31,7 @@ This is what the file looks like by default:
   "enable_unblocked_guns": false,
   "enable_reduced_shake": false,
   "enable_flare_crash_fix": true,
+  "enable_intro": false,
   "enable_arcade_zoom": true,
   "max_zoom_level": 5,
 
@@ -54,6 +56,9 @@ The list of toggles is:
      * Max Zoom: The maximum zoom level.
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
+6. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
+   After the first second, a fresh key press or mouse click skips them.
+   Remove the standalone hf_intro DLL before enabling this option.
 
 ## Refuel rate and speed curve (1.163 only)
 
