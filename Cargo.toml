@@ -1,6 +1,6 @@
 [package]
 name = "highfleet-qol"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 
 [lib]
@@ -19,8 +19,5 @@ highfleet = { path = "highfleet-rs" }
 libc = "0.2.177"
 patchy = { package = "patchy-rs", git = "https://github.com/logdot/patchy-rs.git", tag = "v0.1.0" }
 windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
