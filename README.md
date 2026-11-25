@@ -32,6 +32,8 @@ This is what the file looks like by default:
   "enable_reduced_shake": false,
   "enable_flare_crash_fix": true,
   "enable_intro": false,
+  "enemy_laser_warning": true,
+  "enemy_sound_warning": true,
   "enable_arcade_zoom": true,
   "max_zoom_level": 5,
 
@@ -62,6 +64,9 @@ The list of toggles is:
 7. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
    After the first second, a fresh key press or mouse click skips them.
    Remove the standalone hf_intro DLL before enabling this option.
+8. Pre-Fire Warnings (Steam 1.163 only): Set `"enemy_laser_warning": false` to hide gun pre-fire warning lines for both sides, including friendly and allied ships.
+   Set `"enemy_sound_warning": false` to mute the enemy pre-fire sound warning.
+   Both default to `true` and work independently.
 
 ## Refuel rate and speed curve (1.163 only)
 
