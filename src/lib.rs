@@ -28,6 +28,8 @@ mod plane;
 mod plane_guns;
 mod plane_health;
 #[cfg(not(feature = "1_151"))]
+mod plane_icons;
+#[cfg(not(feature = "1_151"))]
 mod refuel;
 mod replay_call;
 mod rng;
@@ -197,6 +199,11 @@ unsafe extern "C" fn init() -> bool {
     {
         if config.enable_intro {
             prepare_patch!(intro::prepare(&mut patch_session));
+        }
+        if config.enable_plane_icons_rework {
+            prepare_patch!(plane_icons::patch_plane_icons(&mut patch_session));
+        } else {
+            log::info!("Plane icons rework disabled");
         }
         if !config.enemy_laser_warning {
             prepare_patch!(enemy_laser_warning::prepare(&mut patch_session));

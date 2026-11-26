@@ -31,6 +31,7 @@ This is what the file looks like by default:
 
 ```json
 {
+  "enable_plane_icons_rework": true,
   "enable_anti_wobble": false,
   "enable_unblocked_guns": false,
   "enable_reduced_shake": false,
@@ -55,20 +56,21 @@ This is what the file looks like by default:
 ```
 
 The list of toggles is:
-1. Anti Wobble: Custom GUI elements in the battle screen will no longer shake.
-2. Unblocked Guns: Hull and other components no longer block weapons. Only does anything in 1.151 since this is the default behaviour in 1.163.
-3. Reduced Shake: Greatly reduces the amount of screen shake in the battle screen, e.g. when firing weapons or using thrusters.
-4. Flare Crash Fix: Prevents the 1.163 missile-fuze crash when a flare's linked object is no longer available. Enabled by default and not required on 1.151.
-5. Arcade Zoom: Unlocks zooming in and out in the battle screen.
+1. Plane Icons Rework: Shows every aircraft type listed in `planes` in the battle aircraft panel, not just the T-7 and LA-29. Each type needs an animation named `sign_<aircraft name>`; a type without one still shows its count, with an empty slot for the icon. See [Aircraft icons](#aircraft-icons). Enabled by default, Steam 1.163 only.
+2. Anti Wobble: Custom GUI elements in the battle screen will no longer shake.
+3. Unblocked Guns: Hull and other components no longer block weapons. Only does anything in 1.151 since this is the default behaviour in 1.163.
+4. Reduced Shake: Greatly reduces the amount of screen shake in the battle screen, e.g. when firing weapons or using thrusters.
+5. Flare Crash Fix: Prevents the 1.163 missile-fuze crash when a flare's linked object is no longer available. Enabled by default and not required on 1.151.
+6. Arcade Zoom: Unlocks zooming in and out in the battle screen.
      * Max Zoom: The maximum zoom level.
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
-6. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules.
+7. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules.
    These cover free-standing parts, engines and the wider KAZ intercept cone.
    For the full 1.151 KAZ, also edit `MDL_KAZ` in `OL.seria`.
    Set `m_mdl_sectors_type=3`, `m_mdl_sectors_threshold=0.5` and `m_mdl_sectors_shift=1`.
    The default `"vanilla"` and `"modern"` leave the 1.163 rules unchanged.
-7. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
+8. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
    After the first second, a fresh key press or mouse click skips them.
    Remove the standalone hf_intro DLL before enabling this option.
 8. Pre-Fire Warnings (Steam 1.163 only): Set `"enemy_laser_warning": false` to hide gun pre-fire warning lines for both sides, including friendly and allied ships.
@@ -142,6 +144,22 @@ Each entry in `planes` can set the aircraft's health and available loadouts. The
 `health` sets both current and maximum health whenever that aircraft launches. It must be greater than zero; missing or invalid values use the game's normal `30.0` health.
 
 Older configurations that store each plane as a loadout array are still accepted and use `30.0` health automatically.
+
+### Aircraft icons
+
+The battle screen's aircraft panel draws one icon per aircraft type from an animation named `sign_<aircraft name>`, the same convention the game uses for its own two types: `CRAFT_T7` uses `sign_T7`, `CRAFT_LA29` uses `sign_LA29`, so a `CRAFT_SB15` needs `sign_SB15`. Add the animation to any `.res` file included by `Media/media.res` and point it at whatever texture holds the art:
+
+```plaintext
+Animation sign_SB15
+{
+ texture = Static6
+ rect = 3986,211,98,98
+ hotspot = 49,49
+ frames = 1
+}
+```
+
+`sign_T7` is 58 x 73; art larger than that is shrunk to fit, so a 98 x 98 icon also works. A type whose animation is missing is still listed with its count, but its icon slot stays empty. Names are logged once when the panel first asks for them.
 
 ### Aircraft gun ammo
 
