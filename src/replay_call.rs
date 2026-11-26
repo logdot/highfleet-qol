@@ -8,7 +8,7 @@ use patchy::{CallBridge, PatchSession, Result, Trampoline};
 ///
 /// # Safety
 ///
-/// The site must satisfy [`PatchSession::detour_trampoline_with`].
+/// The site must satisfy [`PatchSession::detour_trampoline`].
 /// The overwritten instructions must be valid when replayed verbatim at another address.
 /// `bridge.incoming_stack` must describe `RSP` after the replayed instructions.
 pub unsafe fn replay_then_call(
@@ -17,7 +17,7 @@ pub unsafe fn replay_then_call(
     size: usize,
     bridge: CallBridge<'_>,
 ) -> Result {
-    session.detour_trampoline_with(address, size, |site| {
+    session.detour_trampoline(address, size, |site| {
         let mut code = Trampoline::new();
         site.replay_verbatim(&mut code);
         code.call(bridge);

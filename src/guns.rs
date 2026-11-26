@@ -54,7 +54,7 @@ pub unsafe fn patch_sector_restoration(_session: &mut PatchSession) -> Result {
 pub unsafe fn patch_sector_restoration(session: &mut PatchSession) -> Result {
     use fire_gun::{INJECTION_ADDR, INJECTION_SIZE};
 
-    let p = session.detour_trampoline_with(INJECTION_ADDR, INJECTION_SIZE, |site| {
+    let p = session.detour_trampoline(INJECTION_ADDR, INJECTION_SIZE, |site| {
         build_gun_blocking(site, sector_blocking::is_gun_blocked as *const ())
     })?;
     let cave_base = p
