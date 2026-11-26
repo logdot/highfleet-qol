@@ -3,6 +3,10 @@
 Simple mod with various QOL features.
 It is intended to be used with the [Highfleet Modloader](https://github.com/logdot/Highfleet-Modloader).
 
+QOL requires a Highfleet Modloader build with the shared Patchy service.
+Use the QOL build that matches your Steam executable (1.151 or 1.163).
+On unsupported versions or externally patched executables, QOL warns and still attempts to initialize.
+
 ## Building from source
 
 Initialize the `highfleet-rs` submodule before building with Cargo.

@@ -1,6 +1,6 @@
 //! Ports the Steam 1.151 firing-arc rules to Steam 1.163 (the `classic` elevation rules).
 //!
-//! Three independent differences, each patched only when the bytes are what was analysed:
+//! Three independent differences:
 //!
 //! 1. `World_RaycastBodies` (`0x140239f30`) adds one to the height level of a candidate body whose
 //!    master is missing or of type 7 (free-standing parts: swivel guns, engines, legs). Steam
@@ -19,33 +19,18 @@ use crate::config::ElevationRules;
 
 /// `lea edx,[rax+1]; cmovz edx,eax` in `World_RaycastBodies`; only the `cmovz` is replaced.
 const CANDIDATE_SITE: usize = 0x14023a100;
-const CANDIDATE_ORIGINAL: [u8; 6] = [0x8d, 0x50, 0x01, 0x0f, 0x44, 0xd0];
 /// `mov edx,eax; nop`.
 const CANDIDATE_PATCH: [u8; 3] = [0x89, 0xc2, 0x90];
 
 /// `movss xmm1,[rip+disp]` loading pi/4, in the two target loops of `Weapon_FlakInterceptScan`.
-const CONE_SITES: [(usize, [u8; 8]); 2] = [
-    (
-        0x14002f864,
-        [0xf3, 0x0f, 0x10, 0x0d, 0x40, 0x2f, 0x32, 0x00],
-    ),
-    (
-        0x14002faf8,
-        [0xf3, 0x0f, 0x10, 0x0d, 0xac, 0x2c, 0x32, 0x00],
-    ),
-];
-/// The pi/4 the sites above load.
-const PI_OVER_4_ADDRESS: usize = 0x1403527ac;
+const CONE_SITES: [usize; 2] = [0x14002f864, 0x14002faf8];
 /// An existing `1.2f` in `.rdata`.
 const CONE_1151_ADDRESS: usize = 0x140354758;
 
 /// The type 5 branch of `UpdateEngineCovered`: `comiss xmm6,xmm14; jc ...; movss xmm0,[...];
 /// comiss xmm0,xmm6`, ending right before the shared `jc` at `0x14001c69b`.
 const COVERED_SITE: usize = 0x14001c68a;
-const COVERED_ORIGINAL: [u8; 17] = [
-    0x41, 0x0f, 0x2f, 0xf6, 0x72, 0x36, 0xf3, 0x0f, 0x10, 0x05, 0x34, 0x81, 0x33, 0x00, 0x0f, 0x2f,
-    0xc6,
-];
+const COVERED_SIZE: usize = 17;
 /// The type 3 branch the new code jumps to (`comiss xmm6,xmm12`).
 const COVERED_TYPE_3: usize = 0x14001c65f;
 /// A `0.5f` in `.rdata`.
@@ -59,9 +44,9 @@ fn movss_xmm1(at: usize, target: usize) -> [u8; 8] {
     bytes
 }
 
-/// The replacement for [`COVERED_ORIGINAL`]: `movss xmm10,[0.5f]; jmp type3; nop...`.
-fn covered_patch() -> [u8; 17] {
-    let mut bytes = [0x90; 17];
+/// The replacement for the type 5 branch: `movss xmm10,[0.5f]; jmp type3; nop...`.
+fn covered_patch() -> [u8; COVERED_SIZE] {
+    let mut bytes = [0x90; COVERED_SIZE];
     let disp = (HALF_ADDRESS as i64 - (COVERED_SITE as i64 + 9)) as i32;
     bytes[..5].copy_from_slice(&[0xf3, 0x44, 0x0f, 0x10, 0x15]);
     bytes[5..9].copy_from_slice(&disp.to_le_bytes());
@@ -71,14 +56,6 @@ fn covered_patch() -> [u8; 17] {
     bytes
 }
 
-unsafe fn read<const N: usize>(address: usize) -> [u8; N] {
-    (address as *const [u8; N]).read_unaligned()
-}
-
-unsafe fn float_at(address: usize) -> f32 {
-    (address as *const f32).read_unaligned()
-}
-
 /// Prepares the classic firing-arc patches. Does nothing for `vanilla` and `modern`.
 pub unsafe fn patch_elevation_rules(session: &mut PatchSession, rules: ElevationRules) -> Result {
     if !rules.is_classic() {
@@ -86,32 +63,15 @@ pub unsafe fn patch_elevation_rules(session: &mut PatchSession, rules: Elevation
         return Ok(());
     }
 
-    if read::<6>(CANDIDATE_SITE) == CANDIDATE_ORIGINAL {
-        session.overwrite(CANDIDATE_SITE + 3, &CANDIDATE_PATCH)?;
-        log::info!("Elevation rules: free-standing parts no longer block same-level guns");
-    } else {
-        log::error!("Elevation rules: code at {CANDIDATE_SITE:#x} is not what was expected");
-    }
+    session.overwrite(CANDIDATE_SITE + 3, &CANDIDATE_PATCH)?;
+    log::info!("Elevation rules: free-standing parts no longer block same-level guns");
 
-    let cone_ok = float_at(PI_OVER_4_ADDRESS) == std::f32::consts::FRAC_PI_4
-        && float_at(CONE_1151_ADDRESS) == 1.2
-        && CONE_SITES
-            .iter()
-            .all(|&(at, original)| read::<8>(at) == original);
-    if cone_ok {
-        for (at, _) in CONE_SITES {
-            session.overwrite(at, &movss_xmm1(at, CONE_1151_ADDRESS))?;
-        }
-        log::info!("Elevation rules: KAZ target cone widened to 1.2 rad");
-    } else {
-        log::error!("Elevation rules: KAZ cone code is not what was expected, leaving it alone");
+    for at in CONE_SITES {
+        session.overwrite(at, &movss_xmm1(at, CONE_1151_ADDRESS))?;
     }
+    log::info!("Elevation rules: KAZ target cone widened to 1.2 rad");
 
-    if read::<17>(COVERED_SITE) == COVERED_ORIGINAL && float_at(HALF_ADDRESS) == 0.5 {
-        session.overwrite(COVERED_SITE, &covered_patch())?;
-        log::info!("Elevation rules: KAZ covered test uses the 1.151 rear cone and 50% threshold");
-    } else {
-        log::error!("Elevation rules: KAZ covered code is not what was expected, leaving it alone");
-    }
+    session.overwrite(COVERED_SITE, &covered_patch())?;
+    log::info!("Elevation rules: KAZ covered test uses the 1.151 rear cone and 50% threshold");
     Ok(())
 }

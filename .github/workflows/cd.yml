@@ -22,7 +22,8 @@ jobs:
             - run: |
                 mkdir 1_163\Modloader\mods
                 mkdir 1_151\Modloader\mods
-            - run: cargo test --verbose
+            - run: cargo test --locked --verbose --features 1_151
+            - run: cargo test --locked --verbose --features 1_163
             - run: cargo build --verbose --release --features 1_151
             - run: |
                 mv target\x86_64-pc-windows-msvc\release\highfleet_qol.dll 1_151\Modloader\mods\

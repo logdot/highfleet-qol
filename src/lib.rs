@@ -3,11 +3,14 @@
 #![deny(missing_docs)]
 
 highfleet_mod_api::export_logger!();
+patchy::export_patchy!();
 
 use std::ffi::{c_char, CStr};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::Config;
+
+#[cfg(all(feature = "1_151", feature = "1_163"))]
+compile_error!("select at most one of the `1_151` and `1_163` features");
 
 pub mod config;
 mod dumpable;
@@ -25,6 +28,7 @@ mod plane_guns;
 mod plane_health;
 #[cfg(not(feature = "1_151"))]
 mod refuel;
+mod replay_call;
 mod rng;
 mod sell_multiplier;
 mod shake;
@@ -34,13 +38,32 @@ mod structs;
 mod ttl;
 mod zoom;
 
-/// Set by [`version`] when the game is Steam 1.163. Features that only exist for that version
-/// stay untouched unless this is set, because the modloader still calls `init` after `version`
-/// reports an unsupported game.
-static GAME_IS_STEAM_1_163: AtomicBool = AtomicBool::new(false);
+const TARGET_BUILD: &str = if cfg!(feature = "1_151") {
+    "Steam 1.151"
+} else {
+    "Steam 1.163"
+};
+
+// QoL uses absolute game addresses, regardless of the version reported by the loader.
+const IMAGE_BASE: usize = 0x140000000;
 
 #[no_mangle]
 unsafe extern "C" fn init() -> bool {
+    match patchy::ProcessModule::main() {
+        Ok(module) if module.base_address() == IMAGE_BASE => {}
+        Ok(module) => {
+            log::error!(
+                "Refusing to load QoL: the game is mapped at {:#x} instead of {IMAGE_BASE:#x}",
+                module.base_address()
+            );
+            return false;
+        }
+        Err(error) => {
+            log::error!("Refusing to load QoL: unable to locate the game executable: {error}");
+            return false;
+        }
+    }
+
     let config = Config::load("Modloader/config/qol.json");
     let config = match config {
         Ok(c) => c,
@@ -67,7 +90,13 @@ unsafe extern "C" fn init() -> bool {
         }
     };
 
-    let mut patch_session = patchy::PatchSession::new();
+    let mut patch_session = match patchy::PatchSession::new() {
+        Ok(session) => session,
+        Err(error) => {
+            log::error!("Unable to open a Modloader patch session: {error}");
+            return false;
+        }
+    };
 
     macro_rules! prepare_patch {
         ($operation:expr) => {
@@ -159,27 +188,23 @@ unsafe extern "C" fn init() -> bool {
 
     #[cfg(not(feature = "1_151"))]
     {
-        if !GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
-            log::info!("Refuel rate and speed curve need Steam 1.163, leaving them alone");
-        } else {
-            if config.enable_intro {
-                prepare_patch!(intro::prepare(&mut patch_session));
-            }
-            if !config.enemy_laser_warning {
-                prepare_patch!(enemy_laser_warning::prepare(&mut patch_session));
-            }
-            if !config.enemy_sound_warning {
-                prepare_patch!(enemy_laser_warning::prepare_sound_suppression(
-                    &mut patch_session
-                ));
-            }
-            prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
-            prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
-            prepare_patch!(elevation_rules::patch_elevation_rules(
-                &mut patch_session,
-                config.elevation_rules
+        if config.enable_intro {
+            prepare_patch!(intro::prepare(&mut patch_session));
+        }
+        if !config.enemy_laser_warning {
+            prepare_patch!(enemy_laser_warning::prepare(&mut patch_session));
+        }
+        if !config.enemy_sound_warning {
+            prepare_patch!(enemy_laser_warning::prepare_sound_suppression(
+                &mut patch_session
             ));
         }
+        prepare_patch!(refuel::patch_refuel(&mut patch_session, &config.refuel));
+        prepare_patch!(speed::patch_speed(&mut patch_session, &config.speed));
+        prepare_patch!(elevation_rules::patch_elevation_rules(
+            &mut patch_session,
+            config.elevation_rules
+        ));
     }
 
     if let Err(error) = patch_session.install_permanently() {
@@ -192,17 +217,30 @@ unsafe extern "C" fn init() -> bool {
 
 #[no_mangle]
 unsafe extern "C" fn version(version: *const c_char) -> bool {
-    let version = CStr::from_ptr(version).to_str().unwrap();
-    GAME_IS_STEAM_1_163.store(version == "Steam 1.163", Ordering::Relaxed);
-    if cfg!(feature = "1_151") {
-        version == "Steam 1.151"
-    } else if cfg!(feature = "1_163") {
-        version == "Steam 1.163"
-    } else if version == "Gog 1.163" {
-        log::error!("Gog 1.163 detected");
-        log::error!("Your game will crash. QOL only supports steam versions of the game.");
-        false
-    } else {
-        false
+    let reported = (!version.is_null())
+        .then(|| CStr::from_ptr(version).to_str().ok())
+        .flatten()
+        .unwrap_or("unreported");
+    let supported = reported == TARGET_BUILD;
+    if !supported {
+        log::warn!("QoL targets {TARGET_BUILD}, but Modloader reported {reported}; continuing with the compiled patch addresses");
+    }
+    // This reports compatibility to the loader; `init` does not depend on it.
+    supported
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::version;
+
+    #[test]
+    fn reports_compatibility_for_the_compiled_steam_build() {
+        unsafe {
+            assert_eq!(version(c"Steam 1.151".as_ptr()), cfg!(feature = "1_151"));
+            assert_eq!(version(c"Steam 1.163".as_ptr()), !cfg!(feature = "1_151"));
+            assert!(!version(c"Gog 1.163".as_ptr()));
+            assert!(!version(c"Unknown".as_ptr()));
+            assert!(!version(std::ptr::null()));
+        }
     }
 }

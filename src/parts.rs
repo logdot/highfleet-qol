@@ -8,9 +8,9 @@
 
 use std::{collections::HashMap, ffi::CString};
 
-use patchy::{PatchSession, Result, ReturnType};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
-use crate::{config::ShopPart, rng};
+use crate::{config::ShopPart, replay_call::replay_then_call, rng};
 
 /// Stored representation of a custom part with its RNG parameters.
 struct CustomPart {
@@ -159,12 +159,18 @@ pub unsafe fn patch_custom_parts(
     CUSTOM_PARTS = custom_parts;
 
     // Replay the complete overwritten instruction before injecting the additional parts.
-    session.patch_call(
+    replay_then_call(
+        session,
         HOOK_ADDRESS,
-        inject_custom_parts as *const (),
         6,
-        true,
-        ReturnType::None,
+        CallBridge {
+            callback: inject_custom_parts as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &[],
+            after_call: &[],
+        },
     )?;
     Ok(())
 }

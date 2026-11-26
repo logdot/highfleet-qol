@@ -13,9 +13,7 @@
 //! We replace it with our own logic that multiplies the price by the configured
 //! multiplier before adding it to the player's cash.
 
-use std::arch::naked_asm;
-
-use patchy::{PatchSession, Result, ReturnType};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
 /// The sell price multiplier, written once at init before any patch callback fires.
 static mut SELL_MULTIPLIER: f32 = 1.0;
@@ -53,10 +51,15 @@ pub unsafe fn patch_sell_multiplier(session: &mut PatchSession, multiplier: f32)
 
     session.patch_call(
         PATCH_ADDRESS,
-        trampoline as *const (),
         PATCH_SIZE,
-        false,
-        ReturnType::None,
+        CallBridge {
+            callback: apply_sell_multiplier as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &PASS_PROFILE_AND_PRICE,
+            after_call: &[],
+        },
     )?;
 
     log::info!(
@@ -65,44 +68,19 @@ pub unsafe fn patch_sell_multiplier(session: &mut PatchSession, multiplier: f32)
     Ok(())
 }
 
-/// Naked trampoline that shuttles live register values into the Windows x64
-/// calling convention (RCX, RDX) and tail-calls the pure-Rust helper.
+/// Moves the live profile pointer into RCX and the sale price into EDX for [`apply_sell_multiplier`].
 ///
-/// On entry (after patchy's register save sequence):
-///   RAX = profile pointer  (not clobbered — patchy pushes it but doesn't modify it)
-///   v1.151: EBX = sale price (non-volatile, untouched by patchy)
-///   v1.163: ECX = sale price (saved/restored by patchy as a volatile register,
-///           but the value is still live in RCX at our entry point because patchy
-///           pushes RCX early in SAVE_REGISTERS and the push doesn't modify it)
-///
-/// We move the profile pointer into RCX and the price into EDX, then JMP to
-/// the helper.
-#[unsafe(naked)]
+/// The bridge's `before_call` still sees the site's registers:
+///   v1.151: `MOV RCX, RAX; MOV EDX, EBX`
+///   v1.163: `MOV EDX, ECX; MOV RCX, RAX` (the price is read before RCX is overwritten)
 #[cfg(feature = "1_151")]
-unsafe extern "C" fn trampoline() {
-    naked_asm!(
-        "mov rcx, rax",
-        "mov edx, ebx",
-        "jmp {helper}",
-        helper = sym apply_sell_multiplier,
-    );
-}
-
-#[unsafe(naked)]
+const PASS_PROFILE_AND_PRICE: [u8; 5] = [0x48, 0x89, 0xc1, 0x89, 0xda];
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-unsafe extern "C" fn trampoline() {
-    naked_asm!(
-        "mov edx, ecx",
-        "mov rcx, rax",
-        "jmp {helper}",
-        helper = sym apply_sell_multiplier,
-    );
-}
+const PASS_PROFILE_AND_PRICE: [u8; 5] = [0x89, 0xca, 0x48, 0x89, 0xc1];
 
 /// Pure-Rust helper that applies the sell multiplier.
 ///
-/// Receives the profile pointer and price directly as function arguments
-/// (forwarded from the trampoline via RCX and EDX).
+/// Receives the profile pointer and price as function arguments in RCX and EDX.
 unsafe extern "C" fn apply_sell_multiplier(profile_ptr: *mut u8, price: i32) {
     let cash_ptr = profile_ptr.add(CASH_OFFSET) as *mut i32;
     let adjusted_price = (price as f32 * SELL_MULTIPLIER) as i32;

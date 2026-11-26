@@ -1,29 +1,26 @@
 //! Restores HighFleet 1.151's nullable missile-fuze link check in version 1.163.
 
-use std::slice;
+#[cfg(any(not(feature = "1_151"), test))]
+use patchy::{Condition, DetourSite, ProcessModule, Trampoline};
+use patchy::{PatchSession, Result};
 
-use patchy::{Condition, PatchError, PatchSession, ProcessModule, Result, Trampoline};
-
+#[cfg(any(not(feature = "1_151"), test))]
 const HOOK_RVA: usize = 0x36bb5;
-const NON_NULL_RESUME_RVA: usize = 0x36bbb;
+/// `MOV RBX, RAX; MOV RCX, RSI`.
+#[cfg(any(not(feature = "1_151"), test))]
+const HOOK_SIZE: usize = 6;
+#[cfg(any(not(feature = "1_151"), test))]
 const NULL_EXIT_RVA: usize = 0x36ca2;
-const ORIGINAL_BYTES: [u8; 6] = [0x48, 0x8b, 0xd8, 0x48, 0x8b, 0xce];
 
 /// Prepares the nullable missile-fuze link check required by HighFleet 1.163.
-#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
+#[cfg(not(feature = "1_151"))]
 pub unsafe fn patch_flare_crash(session: &mut PatchSession) -> Result {
     let module = ProcessModule::main()?;
     let hook_address = module.resolve_rva(HOOK_RVA)?;
-    let found_bytes = slice::from_raw_parts(hook_address as *const u8, ORIGINAL_BYTES.len());
 
-    if found_bytes != ORIGINAL_BYTES {
-        return Err(PatchError::SourceChanged {
-            address: hook_address,
-        });
-    }
-
-    let trampoline = build_trampoline(module)?;
-    session.detour_trampoline(hook_address, ORIGINAL_BYTES.len(), trampoline)?;
+    session.detour_trampoline_with(hook_address, HOOK_SIZE, |site| {
+        build_trampoline(site, module)
+    })?;
 
     log::info!("Prepared flare crash fix");
     Ok(())
@@ -36,7 +33,8 @@ pub unsafe fn patch_flare_crash(_session: &mut PatchSession) -> Result {
     Ok(())
 }
 
-fn build_trampoline(module: ProcessModule) -> Result<Trampoline> {
+#[cfg(any(not(feature = "1_151"), test))]
+fn build_trampoline(site: DetourSite, module: ProcessModule) -> Result<Trampoline> {
     let mut trampoline = Trampoline::new();
     let non_null = trampoline.new_label();
 
@@ -44,10 +42,10 @@ fn build_trampoline(module: ProcessModule) -> Result<Trampoline> {
     trampoline.jump_if(Condition::NotEqual, non_null);
     trampoline.absolute_jump(module.resolve_rva(NULL_EXIT_RVA)?);
 
-    // Replay the instructions overwritten at the hook point.
     trampoline.bind(non_null)?;
-    trampoline.bytes(&ORIGINAL_BYTES);
-    trampoline.absolute_jump(module.resolve_rva(NON_NULL_RESUME_RVA)?);
+    // SAFETY: Register-to-register moves do not depend on their address.
+    unsafe { site.replay_verbatim(&mut trampoline) };
+    site.resume(&mut trampoline);
 
     Ok(trampoline)
 }
@@ -57,22 +55,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trampoline_branches_to_the_expected_runtime_addresses() {
-        let module_base = 0x140000000;
-        let trampoline = build_trampoline(ProcessModule::from_base(module_base)).unwrap();
-        let trampoline = trampoline.build(0x180000000).unwrap();
+    fn null_link_exits_while_non_null_link_replays_and_resumes() {
+        let module = ProcessModule::from_base(0x140000000);
+        let hook = module.resolve_rva(HOOK_RVA).unwrap();
+        let snapshot = [0x48, 0x8b, 0xd8, 0x48, 0x8b, 0xce];
+        let cave = 0x140010000;
+        let trampoline = build_trampoline(DetourSite::new(HOOK_SIZE), module)
+            .unwrap()
+            .into_plan()
+            .unwrap()
+            .build_for_site(cave, &snapshot, hook + HOOK_SIZE)
+            .unwrap();
 
-        assert_eq!(&trampoline[..3], &[0x48, 0x85, 0xc0]);
-        assert_eq!(&trampoline[3..9], &[0x0f, 0x85, 0x0e, 0x00, 0x00, 0x00]);
+        let branch = trampoline
+            .strip_prefix(&[0x48, 0x85, 0xc0, 0x0f, 0x85]) // TEST RAX,RAX; JNZ rel32
+            .expect("a non-null RAX must take the conditional branch");
+        let (non_null_disp, fallthrough) = branch.split_at(4);
+        let non_null = (trampoline.len() - fallthrough.len())
+            .wrapping_add_signed(i32::from_le_bytes(non_null_disp.try_into().unwrap()) as isize);
+
+        // The null path falls through to the jump out of the native function.
+        let null_jump = fallthrough.strip_prefix(&[0xff, 0x25]).unwrap(); // JMP [RIP+disp32]
+        let (pointer_disp, after_jump) = null_jump.split_at(4);
+        let pointer = (trampoline.len() - after_jump.len())
+            .wrapping_add_signed(i32::from_le_bytes(pointer_disp.try_into().unwrap()) as isize);
         assert_eq!(
-            usize::from_le_bytes(trampoline[15..23].try_into().unwrap()),
-            module_base + NULL_EXIT_RVA
+            usize::from_le_bytes(trampoline[pointer..][..8].try_into().unwrap()),
+            module.resolve_rva(NULL_EXIT_RVA).unwrap()
         );
-        assert_eq!(&trampoline[23..29], &ORIGINAL_BYTES);
+
+        let resume = trampoline[non_null..]
+            .strip_prefix(&snapshot)
+            .expect("the non-null path must replay the displaced instructions")
+            .strip_prefix(&[0xe9]) // JMP rel32
+            .unwrap();
+        let resume_disp = i32::from_le_bytes(resume[..4].try_into().unwrap());
+        let next = cave + trampoline.len() - resume.len() + 4;
         assert_eq!(
-            usize::from_le_bytes(trampoline[35..43].try_into().unwrap()),
-            module_base + NON_NULL_RESUME_RVA
+            next.wrapping_add_signed(resume_disp as isize),
+            hook + HOOK_SIZE
         );
-        assert_eq!(trampoline.len(), 43);
     }
 }

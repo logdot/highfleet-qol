@@ -1,6 +1,6 @@
 //! Overrides HighFleet's fixed aircraft-gun ammo after the native configurator runs.
 
-use std::{arch::naked_asm, collections::HashMap, mem::size_of, slice, sync::OnceLock};
+use std::{collections::HashMap, mem::size_of, sync::OnceLock};
 
 use highfleet::general::EscadraString;
 
@@ -8,7 +8,7 @@ use highfleet::general::EscadraString;
 use highfleet::v1_151::Ammo;
 #[cfg(not(feature = "1_151"))]
 use highfleet::v1_163::Ammo;
-use patchy::{PatchSession, Result, ReturnType};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
 use crate::structs::aircraft_logic::AircraftLogic;
 
@@ -39,29 +39,22 @@ const EXPECTED_AMMO_SIZE: usize = 0x188;
 
 const _: () = assert!(size_of::<Ammo>() == EXPECTED_AMMO_SIZE);
 
-#[derive(Clone, Copy)]
-struct CallSite {
-    address: usize,
-    expected_bytes: [u8; 5],
-}
+/// Each site is a five-byte `CALL rel32` to the configure-plane-gun function.
+const CALL_SIZE: usize = 5;
 
 #[cfg(feature = "1_151")]
-const CALL_SITES: &[CallSite] = &[CallSite {
-    address: 0x14002f502,
-    expected_bytes: [0xe8, 0x19, 0xf7, 0xfd, 0xff],
-}];
+const CALL_SITES: &[usize] = &[0x14002f502];
 
 #[cfg(not(feature = "1_151"))]
-const CALL_SITES: &[CallSite] = &[
-    CallSite {
-        address: 0x14002ec99,
-        expected_bytes: [0xe8, 0x82, 0xfd, 0xfd, 0xff],
-    },
-    CallSite {
-        address: 0x14002edfb,
-        expected_bytes: [0xe8, 0x20, 0xfc, 0xfd, 0xff],
-    },
-];
+const CALL_SITES: &[usize] = &[0x14002ec99, 0x14002edfb];
+
+/// `MOV R8, RSI`.
+///
+/// At each patched call site RSI contains the aircraft Body, while RCX and RDX
+/// contain the original configure-plane-gun arguments. The AircraftLogic back-link
+/// is not initialized until later in the launch function, so the Body must be
+/// forwarded from this live register instead.
+const PASS_AIRCRAFT: [u8; 3] = [0x49, 0x89, 0xf0];
 
 static LOADOUT_GUNS: OnceLock<HashMap<String, String>> = OnceLock::new();
 
@@ -86,53 +79,23 @@ pub unsafe fn patch_plane_guns(session: &mut PatchSession) -> Result {
         return Ok(());
     }
 
-    let mut valid = true;
-    for call_site in CALL_SITES {
-        let found_bytes = slice::from_raw_parts(
-            call_site.address as *const u8,
-            call_site.expected_bytes.len(),
-        );
-        if found_bytes != call_site.expected_bytes {
-            log::error!(
-                "plane_guns: unexpected bytes at {:#x}; expected {:02x?}, found {:02x?}",
-                call_site.address,
-                call_site.expected_bytes,
-                found_bytes
-            );
-            valid = false;
-        }
-    }
-
-    if !valid {
-        log::error!("plane_guns: no hooks were prepared");
-        return Ok(());
-    }
-
-    for call_site in CALL_SITES {
+    for &address in CALL_SITES {
         session.patch_call(
-            call_site.address,
-            configure_plane_gun_bridge as *const (),
-            call_site.expected_bytes.len(),
-            false,
-            ReturnType::None,
+            address,
+            CALL_SIZE,
+            CallBridge {
+                callback: configure_plane_gun_and_override as *const (),
+                incoming_stack: StackAlignment::Aligned16,
+                flags: FlagPolicy::Preserve,
+                keep_return: KeepReturn::Neither,
+                before_call: &PASS_AIRCRAFT,
+                after_call: &[],
+            },
         )?;
     }
 
     log::info!("Prepared {} custom aircraft-gun hook(s)", CALL_SITES.len());
     Ok(())
-}
-
-/// At each patched call site RSI contains the aircraft Body, while RCX and RDX
-/// contain the original configure-plane-gun arguments. The AircraftLogic back-link
-/// is not initialized until later in the launch function, so the Body must be
-/// forwarded from this live register instead.
-#[unsafe(naked)]
-unsafe extern "C" fn configure_plane_gun_bridge() {
-    naked_asm!(
-        "mov r8, rsi",
-        "jmp {helper}",
-        helper = sym configure_plane_gun_and_override,
-    );
 }
 
 unsafe extern "C" fn configure_plane_gun_and_override(

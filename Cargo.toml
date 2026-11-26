@@ -11,13 +11,13 @@ crate-type = ["cdylib"]
 1_163 = []
 
 [dependencies]
-highfleet-mod-api = { git = "https://github.com/logdot/Highfleet-Modloader.git", tag = "v4.0.0" }
+highfleet-mod-api = { git = "https://github.com/logdot/Highfleet-Modloader.git", rev = "9af922b253c1cd675403822a0103d4b385f3f0be" }
 log = "0.4.28"
 serde = { version = "1.0.221", features = ["derive"] }
 serde_json = "1.0.144"
 highfleet = { path = "highfleet-rs" }
 libc = "0.2.177"
-patchy = { package = "patchy-rs", git = "https://github.com/logdot/patchy-rs.git", tag = "v0.1.0" }
+patchy = { package = "highfleet-patchy-client", git = "https://github.com/logdot/Highfleet-Modloader.git", rev = "9af922b253c1cd675403822a0103d4b385f3f0be" }
 windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
