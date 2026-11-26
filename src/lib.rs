@@ -195,7 +195,10 @@ unsafe extern "C" fn init() -> bool {
     ));
 
     if config.enable_plane_icons_rework {
-        prepare_patch!(plane_icons::patch_plane_icons(&mut patch_session));
+        // Optional: a build mismatch must cost the panel, not the rest of qol.
+        if let Err(error) = plane_icons::patch_plane_icons(&mut patch_session) {
+            log::warn!("Plane icons rework not prepared: {error}");
+        }
     } else {
         log::info!("Plane icons rework disabled");
     }
