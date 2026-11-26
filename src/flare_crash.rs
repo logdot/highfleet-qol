@@ -18,7 +18,7 @@ pub unsafe fn patch_flare_crash(session: &mut PatchSession) -> Result {
     let module = ProcessModule::main()?;
     let hook_address = module.resolve_rva(HOOK_RVA)?;
 
-    session.detour_trampoline_with(hook_address, HOOK_SIZE, |site| {
+    session.detour_trampoline(hook_address, HOOK_SIZE, |site| {
         build_trampoline(site, module)
     })?;
 

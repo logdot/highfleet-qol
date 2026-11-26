@@ -67,22 +67,23 @@ unsafe extern "C" fn skip_title_on_input() {
 }
 
 pub unsafe fn prepare(session: &mut PatchSession) -> Result {
-    let mut trampoline = Trampoline::new();
-    // SAFETY: RSP is 16-byte aligned at the branch and the callback takes no arguments.
-    unsafe {
-        trampoline.call(CallBridge {
-            callback: skip_title_on_input as *const (),
-            incoming_stack: StackAlignment::Aligned16,
-            flags: FlagPolicy::Preserve,
-            keep_return: KeepReturn::Neither,
-            before_call: &[],
-            after_call: &[],
-        });
-    }
-    trampoline.relative_jump(EPILOGUE);
     // SAFETY: This hook assumes Steam 1.163's documented six-byte branch and
-    // epilogue. The trampoline preserves volatile registers and resumes at that epilogue.
-    unsafe { session.detour_trampoline(SKIP_BRANCH, 6, trampoline)? };
+    // epilogue. RSP is 16-byte aligned at the branch and the callback takes no arguments.
+    unsafe {
+        session.detour_trampoline(SKIP_BRANCH, 6, |_| {
+            let mut trampoline = Trampoline::new();
+            trampoline.call(CallBridge {
+                callback: skip_title_on_input as *const (),
+                incoming_stack: StackAlignment::Aligned16,
+                flags: FlagPolicy::Preserve,
+                keep_return: KeepReturn::Neither,
+                before_call: &[],
+                after_call: &[],
+            });
+            trampoline.relative_jump(EPILOGUE);
+            Ok(trampoline)
+        })?;
+    }
 
     log::info!("Prepared keyboard-skippable native intro");
     Ok(())
