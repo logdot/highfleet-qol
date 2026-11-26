@@ -1,16 +1,19 @@
 //! Applies per-aircraft health after the game initializes a launched aircraft.
 
-use std::{arch::naked_asm, collections::HashMap, slice, sync::OnceLock};
+use std::{collections::HashMap, sync::OnceLock};
 
 #[cfg(feature = "1_151")]
 use highfleet::v1_151::Body;
 #[cfg(not(feature = "1_151"))]
 use highfleet::v1_163::Body;
-use patchy::{PatchSession, Result, ReturnType};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
-use crate::config::DEFAULT_PLANE_HEALTH;
+use crate::{config::DEFAULT_PLANE_HEALTH, replay_call::replay_then_call};
 
-const ORIGINAL_BYTES: [u8; 6] = [0x8b, 0x8e, 0x88, 0x01, 0x00, 0x00];
+/// `MOV ECX, [RSI + 0x188]`, replayed before the hook so its ECX result survives.
+const HOOK_SIZE: usize = 6;
+/// `MOV RCX, RSI`: the aircraft's ordinary Body.
+const PASS_AIRCRAFT: [u8; 3] = [0x48, 0x89, 0xf1];
 
 #[cfg(feature = "1_151")]
 const HOOK_ADDRESS: usize = 0x14002f641;
@@ -52,37 +55,22 @@ pub unsafe fn patch_plane_health(session: &mut PatchSession) -> Result {
         return Ok(());
     }
 
-    let found_bytes = slice::from_raw_parts(HOOK_ADDRESS as *const u8, ORIGINAL_BYTES.len());
-    if found_bytes != ORIGINAL_BYTES {
-        log::error!(
-            "plane_health: unexpected bytes at {HOOK_ADDRESS:#x}; expected {:02x?}, found {:02x?}",
-            ORIGINAL_BYTES,
-            found_bytes
-        );
-        return Ok(());
-    }
-
-    session.patch_call(
+    replay_then_call(
+        session,
         HOOK_ADDRESS,
-        apply_plane_health_bridge as *const (),
-        ORIGINAL_BYTES.len(),
-        true,
-        ReturnType::None,
+        HOOK_SIZE,
+        CallBridge {
+            callback: apply_plane_health as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &PASS_AIRCRAFT,
+            after_call: &[],
+        },
     )?;
 
     log::info!("Prepared custom aircraft-health hook at {HOOK_ADDRESS:#x}");
     Ok(())
-}
-
-/// At the hook site RSI contains the aircraft's ordinary Body.
-/// The overwritten instruction is replayed before this bridge runs, and patchy restores its ECX result afterward.
-#[unsafe(naked)]
-unsafe extern "C" fn apply_plane_health_bridge() {
-    naked_asm!(
-        "mov rcx, rsi",
-        "jmp {helper}",
-        helper = sym apply_plane_health,
-    );
 }
 
 unsafe extern "C" fn apply_plane_health(aircraft: *mut Body) {

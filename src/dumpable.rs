@@ -1,6 +1,13 @@
-use std::arch::asm;
+#[cfg(feature = "1_151")]
+use highfleet::v1_151::Body;
+#[cfg(not(feature = "1_151"))]
+use highfleet::v1_163::Body;
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
-use patchy::{PatchSession, Result, ReturnType};
+use crate::replay_call::replay_then_call;
+
+/// `MOV RCX, RSI`.
+const PASS_RSI: [u8; 3] = [0x48, 0x89, 0xf1];
 
 pub unsafe fn dumpable(session: &mut PatchSession) -> Result {
     let address;
@@ -13,30 +20,26 @@ pub unsafe fn dumpable(session: &mut PatchSession) -> Result {
         address = 0x1400256e0;
     }
 
-    session.patch_call(
+    replay_then_call(
+        session,
         address,
-        set_dumpable as *const (),
         6,
-        true,
-        ReturnType::None,
+        CallBridge {
+            callback: set_dumpable as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &PASS_RSI,
+            after_call: &[],
+        },
     )?;
     Ok(())
 }
 
-#[no_mangle]
-#[cfg(feature = "1_151")]
-unsafe extern "C" fn set_dumpable() {
-    asm! {
-        "mov byte ptr [rsi + 0x8e6], 0",
-        out("rsi") _,
-    }
-}
-
-#[no_mangle]
-#[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
-unsafe extern "C" fn set_dumpable() {
-    asm! {
-        "mov byte ptr [rsi + 0x91E], 0",
-        out("rsi") _,
-    }
+unsafe extern "C" fn set_dumpable(body: *mut Body) {
+    #[cfg(feature = "1_151")]
+    let flag = &raw mut (*body).unknown_08e6h;
+    #[cfg(not(feature = "1_151"))]
+    let flag = &raw mut (*body).unknown_091eh;
+    flag.write([0]);
 }

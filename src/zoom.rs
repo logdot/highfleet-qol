@@ -1,4 +1,4 @@
-use patchy::{PatchSession, Result, ReturnType};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
 static mut MIN_ZOOM: u32 = 3;
 static mut MAX_ZOOM: u32 = 3;
@@ -40,10 +40,15 @@ pub unsafe fn patch_zoom(session: &mut PatchSession, min_zoom: u32, max_zoom: u3
 
     session.patch_call(
         address,
-        set_zoom_level as *const (),
         override_count,
-        false,
-        ReturnType::None,
+        CallBridge {
+            callback: set_zoom_level as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &[],
+            after_call: &[],
+        },
     )?;
     Ok(())
 }
@@ -63,10 +68,15 @@ pub unsafe fn patch_levels(session: &mut PatchSession, zoom_levels: Vec<f32>) ->
 
     session.patch_call(
         address,
-        calc_zoom_value as *const (),
         5,
-        false,
-        ReturnType::Xmm0,
+        CallBridge {
+            callback: calc_zoom_value as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Xmm0,
+            before_call: &[],
+            after_call: &[],
+        },
     )?;
     Ok(())
 }

@@ -11,10 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use patchy::{PatchError, PatchSession, ProcessModule, Result, ReturnType, Trampoline};
+use patchy::{
+    CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment, Trampoline,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
-const IMAGE_BASE: usize = 0x140000000;
 const SKIP_BLOCK: usize = 0x1402ade6e;
 const SKIP_BRANCH: usize = SKIP_BLOCK + 15;
 const EPILOGUE: usize = 0x1402c7562;
@@ -66,19 +67,21 @@ unsafe extern "C" fn skip_title_on_input() {
 }
 
 pub unsafe fn prepare(session: &mut PatchSession) -> Result {
-    // The hook and scene-state addresses below are absolute, not relocatable.
-    if ProcessModule::main()?.base_address() != IMAGE_BASE {
-        return Err(PatchError::SourceChanged {
-            address: IMAGE_BASE,
+    let mut trampoline = Trampoline::new();
+    // SAFETY: RSP is 16-byte aligned at the branch and the callback takes no arguments.
+    unsafe {
+        trampoline.call(CallBridge {
+            callback: skip_title_on_input as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &[],
+            after_call: &[],
         });
     }
-
-    let mut trampoline = Trampoline::new();
-    trampoline.preserved_call(skip_title_on_input as *const (), &[], &[], ReturnType::None);
     trampoline.relative_jump(EPILOGUE);
-    // SAFETY: Modloader identifies Steam 1.163, whose six-byte branch and
-    // epilogue are documented in the intro research. The trampoline preserves
-    // volatile registers and resumes at that epilogue.
+    // SAFETY: This hook assumes Steam 1.163's documented six-byte branch and
+    // epilogue. The trampoline preserves volatile registers and resumes at that epilogue.
     unsafe { session.detour_trampoline(SKIP_BRANCH, 6, trampoline)? };
 
     log::info!("Prepared keyboard-skippable native intro");
