@@ -56,7 +56,7 @@ This is what the file looks like by default:
 ```
 
 The list of toggles is:
-1. Plane Icons Rework: Shows every aircraft type listed in `planes` in the battle aircraft panel, not just the T-7 and LA-29. Each type needs an animation named `sign_<aircraft name>`; a type without one still shows its count, with an empty slot for the icon. See [Aircraft icons](#aircraft-icons). Enabled by default, Steam 1.163 only.
+1. Plane Icons Rework: Shows every aircraft type listed in `planes` in the battle aircraft panel, not just the T-7 and LA-29. Each type needs an animation named `sign_<aircraft name>`; a type without one still shows its count, with an empty slot for the icon. See [Aircraft icons](#aircraft-icons). Enabled by default, Steam 1.151 and 1.163.
 2. Anti Wobble: Custom GUI elements in the battle screen will no longer shake.
 3. Unblocked Guns: Hull and other components no longer block weapons. Only does anything in 1.151 since this is the default behaviour in 1.163.
 4. Reduced Shake: Greatly reduces the amount of screen shake in the battle screen, e.g. when firing weapons or using thrusters.

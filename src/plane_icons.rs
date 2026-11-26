@@ -1,12 +1,12 @@
 //! Reworks the battle **CRAFTS / MUNITION** panel so every aircraft type is listed, not just the
 //! T-7 and LA-29.
 //!
-//! The panel is drawn once per frame by `Hud_DrawMapSignLabels` (`0x14029b3e0`), called from
-//! `combatEvents` at `0x14029a8f6`. Its aircraft list is not data: the oid of every part is
-//! compared against two hardcoded strings (`"CRAFT_LA29"` and `"CRAFT_T7"`), each feeding its own
-//! counter register and its own hand-written draw block. A third type - for example a QoL aircraft
-//! such as `CRAFT_SB15` - can never be counted and never gets an icon, so the panel shows nothing
-//! for it.
+//! The panel is drawn once per frame inside `combatEvents`: `somethingAircraftDisplay__`
+//! (`0x140278780`) on 1.151, `Hud_DrawMapSignLabels` (`0x14029b3e0`) on 1.163. Its aircraft list is
+//! not data: the oid of every part is compared against two hardcoded strings (`"CRAFT_LA29"` and
+//! `"CRAFT_T7"`), each feeding its own counter register and its own hand-written draw block. A
+//! third type - for example a QoL aircraft such as `CRAFT_SB15` - can never be counted and never
+//! gets an icon, so the panel shows nothing for it.
 //!
 //! With this option enabled, that call is replaced by the same drawing driven by a list:
 //!
@@ -29,7 +29,11 @@
 //! the count by 35. The one addition to the enemy side is that its left edge is pulled left when
 //! its widest row would otherwise run off the screen, because both rows grow rightwards.
 //!
-//! Only Steam 1.163 is supported; on 1.151 this module is not compiled.
+//! Both Steam builds are supported from this one module; the address table, the aircraft-logic
+//! offset and the munition list are chosen by the `1_151` feature. The 1.151 panel has no gun entry
+//! at all (the game only counts bombs, rockets and K-13 there) and draws the T-7, LA-29 and all
+//! three munition icons even when their count is zero, so this module keeps that behaviour for
+//! those entries; mod-added types are only listed when the side actually has one.
 
 use std::ffi::{c_char, CString};
 use std::mem::{size_of, MaybeUninit};
@@ -41,36 +45,120 @@ use windows_sys::Win32::System::Memory::{
     VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
 };
 
-/// `CALL Hud_DrawMapSignLabels` inside `combatEvents`: `e8 e5 0a 00 00`.
+/// `CALL` to the panel inside `combatEvents`, the stolen bytes, the call target and the address
+/// the trampoline resumes at. Steam 1.151 routes it through `somethingAircraftDisplay__`, 1.163
+/// through `Hud_DrawMapSignLabels`.
+#[cfg(feature = "1_151")]
+const SITE_RVA: usize = 0x277bad;
+#[cfg(not(feature = "1_151"))]
 const SITE_RVA: usize = 0x29a8f6;
+
+#[cfg(feature = "1_151")]
+const STOLEN: [u8; 5] = [0xe8, 0xce, 0x0b, 0x00, 0x00];
+#[cfg(not(feature = "1_151"))]
 const STOLEN: [u8; 5] = [0xe8, 0xe5, 0x0a, 0x00, 0x00];
+
+#[cfg(feature = "1_151")]
+const TARGET_RVA: usize = 0x278780;
+#[cfg(not(feature = "1_151"))]
 const TARGET_RVA: usize = 0x29b3e0;
+
+#[cfg(feature = "1_151")]
+const CONTINUATION_RVA: usize = 0x277bb2;
+#[cfg(not(feature = "1_151"))]
 const CONTINUATION_RVA: usize = 0x29a8fb;
 
 // Every function this module calls, relative to the module base.
+#[cfg(feature = "1_151")]
+const BODY_MARKERS_RVA: usize = 0x278120;
+#[cfg(not(feature = "1_151"))]
 const BODY_MARKERS_RVA: usize = 0x29ae40;
+
+#[cfg(feature = "1_151")]
+const LOAD_MEDIA_RVA: usize = 0x164740;
+#[cfg(not(feature = "1_151"))]
 const LOAD_MEDIA_RVA: usize = 0x170230;
+
+#[cfg(feature = "1_151")]
+const SET_SPRITE_FIELDS_RVA: usize = 0x166ff0;
+#[cfg(not(feature = "1_151"))]
 const SET_SPRITE_FIELDS_RVA: usize = 0x172ae0;
+
+#[cfg(feature = "1_151")]
+const QUAD_POSITION_RVA: usize = 0x166ad0;
+#[cfg(not(feature = "1_151"))]
 const QUAD_POSITION_RVA: usize = 0x1725c0;
+
+#[cfg(feature = "1_151")]
+const QUAD_RENDER_EX_RVA: usize = 0x166fb0;
+#[cfg(not(feature = "1_151"))]
 const QUAD_RENDER_EX_RVA: usize = 0x172aa0;
+
+#[cfg(feature = "1_151")]
+const FONT_SETUP_RVA: usize = 0x198e70;
+#[cfg(not(feature = "1_151"))]
 const FONT_SETUP_RVA: usize = 0x1a8710;
+
+#[cfg(feature = "1_151")]
+const FONT_SET_COLOR_RVA: usize = 0x163630;
+#[cfg(not(feature = "1_151"))]
 const FONT_SET_COLOR_RVA: usize = 0x16f120;
+
+#[cfg(feature = "1_151")]
+const MEASURE_STRING_RVA: usize = 0x162f00;
+#[cfg(not(feature = "1_151"))]
 const MEASURE_STRING_RVA: usize = 0x16e9f0;
+
+#[cfg(feature = "1_151")]
+const DRAW_LABEL_RVA: usize = 0x163050;
+#[cfg(not(feature = "1_151"))]
 const DRAW_LABEL_RVA: usize = 0x16eb40;
+
+#[cfg(feature = "1_151")]
+const DRAW_WORLD_LINE_RVA: usize = 0x2279a0;
+#[cfg(not(feature = "1_151"))]
 const DRAW_WORLD_LINE_RVA: usize = 0x248ba0;
+
+#[cfg(feature = "1_151")]
+const CHECK_PART_FLAG_RVA: usize = 0x47960;
+#[cfg(not(feature = "1_151"))]
 const CHECK_PART_FLAG_RVA: usize = 0x49470;
 
 // Globals, relative to the module base.
+#[cfg(feature = "1_151")]
+const MEDIA_MANAGER_RVA: usize = 0x3921f78;
+#[cfg(not(feature = "1_151"))]
 const MEDIA_MANAGER_RVA: usize = 0x3a119e8;
+
+#[cfg(feature = "1_151")]
+const GRAPHICS_WIDTH_RVA: usize = 0x39443dc;
+#[cfg(not(feature = "1_151"))]
 const GRAPHICS_WIDTH_RVA: usize = 0x3a158fc;
+
+#[cfg(feature = "1_151")]
+const PLANE_TABLE_RVA: usize = 0x3942740;
+#[cfg(not(feature = "1_151"))]
 const PLANE_TABLE_RVA: usize = 0x3a13c50;
 
 /// Player roster: `{ list head, length }`, built by the combat level scripts.
+#[cfg(feature = "1_151")]
+const PLAYER_ROSTER: Roster = Roster {
+    list: 0x7eedd78,
+    length: 0x7eedd80,
+};
+#[cfg(not(feature = "1_151"))]
 const PLAYER_ROSTER: Roster = Roster {
     list: 0x7fc73b0,
     length: 0x7fc73b8,
 };
+
 /// Enemy roster.
+#[cfg(feature = "1_151")]
+const ENEMY_ROSTER: Roster = Roster {
+    list: 0x7eedec0,
+    length: 0x7eedec8,
+};
+#[cfg(not(feature = "1_151"))]
 const ENEMY_ROSTER: Roster = Roster {
     list: 0x7fc75a8,
     length: 0x7fc75b0,
@@ -95,7 +183,13 @@ const TLL_NODE_SIZE: usize = 0x60;
 const NODE_BODY: usize = 0x18;
 const BODY_CODE: usize = 0x28;
 const BODY_OID: usize = 0x190;
+#[cfg(feature = "1_151")]
+const BODY_AIRCRAFT_LOGIC: usize = 0x9e8;
+#[cfg(not(feature = "1_151"))]
 const BODY_AIRCRAFT_LOGIC: usize = 0xa20;
+#[cfg(feature = "1_151")]
+const BODY_SIZE: usize = 0xa08;
+#[cfg(not(feature = "1_151"))]
 const BODY_SIZE: usize = 0xa30;
 const CODE_BODY: i32 = 15;
 /// `Stats.m_category` bit that marks the aircraft category.
@@ -179,12 +273,28 @@ impl Vec2 {
 }
 
 /// The munition icons in the game's order, with the counter each one shows.
+///
+/// 1.151 has no gun entry in this panel at all: the game only counts bombs, rockets and K-13.
+#[cfg(feature = "1_151")]
+const MUNITIONS: [(&str, fn(&Totals) -> i32); 3] = [
+    ("sign_GPB", |totals| totals.bombs),
+    ("sign_NAR", |totals| totals.rockets),
+    ("sign_AAM", |totals| totals.aam),
+];
+#[cfg(not(feature = "1_151"))]
 const MUNITIONS: [(&str, fn(&Totals) -> i32); 4] = [
     ("sign_GPB", |totals| totals.bombs),
     ("sign_NAR", |totals| totals.rockets),
     ("sign_AAM", |totals| totals.aam),
     ("sign_GUN", |totals| totals.gun),
 ];
+
+/// 1.151 always draws the T-7 and LA-29 icons, even with no planes of that type; 1.163 hides a
+/// zero count. Mod-added types are only listed when the side actually has one (otherwise every
+/// type registered in `planes` would be listed with a zero).
+const ALWAYS_SHOW_VANILLA_CRAFTS: bool = cfg!(feature = "1_151");
+/// 1.151 also draws all three munition entries unconditionally; 1.163 skips a zero.
+const HIDE_ZERO_MUNITIONS: bool = cfg!(not(feature = "1_151"));
 
 /// Runtime addresses, resolved once when the patch is prepared.
 struct Game {
@@ -386,6 +496,8 @@ struct Totals {
     bombs: i32,
     rockets: i32,
     aam: i32,
+    /// Only the 1.163 panel has a gun entry; 1.151 has no such counter.
+    #[cfg_attr(feature = "1_151", allow(dead_code))]
     gun: i32,
 }
 
@@ -510,6 +622,17 @@ fn scan(game: &Game, roster: Roster, registry: &[String]) -> Option<Totals> {
         node = usize_at(node).unwrap_or(sentinel);
     }
     totals.crafts = order(counts);
+    if ALWAYS_SHOW_VANILLA_CRAFTS {
+        // 1.151 draws both vanilla icons unconditionally, so keep them even with zero planes.
+        for vanilla in ["CRAFT_T7", "CRAFT_LA29"] {
+            if registry.iter().any(|craft| craft == vanilla)
+                && !totals.crafts.iter().any(|(name, _)| name == vanilla)
+            {
+                totals.crafts.push((vanilla.to_owned(), 0));
+            }
+        }
+        totals.crafts = order(totals.crafts);
+    }
     Some(totals)
 }
 
@@ -770,7 +893,7 @@ fn draw_side(
     let mut munitions: Vec<Entry> = Vec::new();
     for (name, value) in MUNITIONS {
         let count = value(totals);
-        if count == 0 {
+        if count == 0 && HIDE_ZERO_MUNITIONS {
             continue;
         }
         let Ok(name) = CString::new(name) else {

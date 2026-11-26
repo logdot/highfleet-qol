@@ -37,7 +37,7 @@ pub struct Config {
     /// `CRAFT_SB15`); a type without one still shows its count, with an empty slot for the icon.
     /// Up to three types are listed per row, and up to three rows.
     ///
-    /// Enabled by default. Only does anything on Steam 1.163; on 1.151 it is ignored.
+    /// Enabled by default. Works on Steam 1.151 and 1.163.
     #[serde(default = "default_plane_icons_rework")]
     pub enable_plane_icons_rework: bool,
     /// Stops mod-added combat interface elements from moving with screen shake.
