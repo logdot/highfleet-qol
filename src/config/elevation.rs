@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Key names accepted by the `keys` settings, besides single letters, digits and `F1` to `F12`.
 pub const NAMED_KEYS: &[(&str, u16)] = &[
@@ -55,72 +55,69 @@ pub fn parse_key(name: &str) -> Option<u16> {
 /// Each key is a single letter or digit, `F1` to `F12`, or a name such as `Backslash`, `Tab`,
 /// `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`,
 /// `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket` or `RightBracket`.
-/// An unknown name is reported in the log and that key keeps its default.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Invalid key names are rejected when loading the configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ElevationKeys {
-    /// Raises the held part by one floor. The default is `U`.
-    pub raise: String,
-    /// Lowers the held part by one floor. The default is `P`.
-    pub lower: String,
-    /// Gives the held part back to the game's automatic elevation. The default is `Backslash`.
-    pub auto: String,
+    /// Raises the held part by one floor.
+    /// The default is `U`.
+    pub raise: ElevationKey,
+    /// Lowers the held part by one floor.
+    /// The default is `P`.
+    pub lower: ElevationKey,
+    /// Gives the held part back to the game's automatic elevation.
+    /// The default is `Backslash`.
+    pub auto: ElevationKey,
 }
 
 impl Default for ElevationKeys {
     fn default() -> Self {
         Self {
-            raise: "U".into(),
-            lower: "P".into(),
-            auto: "Backslash".into(),
+            raise: ElevationKey::from_name("U").expect("valid default raise key"),
+            lower: ElevationKey::from_name("P").expect("valid default lower key"),
+            auto: ElevationKey::from_name("Backslash").expect("valid default auto key"),
         }
     }
 }
 
-/// Virtual-key codes and display names that were checked and are ready to use.
+/// A validated key binding, stored in JSON as its display name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedKeys {
-    /// Virtual-key code for raising.
-    pub raise: u16,
-    /// Virtual-key code for lowering.
-    pub lower: u16,
-    /// Virtual-key code for returning to automatic elevation.
-    pub auto: u16,
-    /// Text shown for the raise key in the hint.
-    pub raise_label: String,
-    /// Text shown for the lower key in the hint.
-    pub lower_label: String,
-    /// Text shown for the auto key in the hint.
-    pub auto_label: String,
+pub struct ElevationKey {
+    code: u16,
+    label: String,
 }
 
-impl ElevationKeys {
-    /// Resolves the three key names. Unknown names are logged and replaced by their defaults.
-    pub fn resolve(&self) -> ResolvedKeys {
-        let defaults = ElevationKeys::default();
-        let pick = |setting: &str, configured: &String, default: &String| -> (u16, String) {
-            match parse_key(configured) {
-                Some(code) => (code, configured.trim().to_string()),
-                None => {
-                    log::error!(
-                        "Elevation: unknown key \"{configured}\" for {setting}, using \"{default}\""
-                    );
-                    (parse_key(default).unwrap_or(0), default.clone())
-                }
-            }
-        };
+impl ElevationKey {
+    fn from_name(name: &str) -> Option<Self> {
+        let label = name.trim();
+        Some(Self {
+            code: parse_key(label)?,
+            label: label.to_owned(),
+        })
+    }
 
-        let (raise, raise_label) = pick("raise", &self.raise, &defaults.raise);
-        let (lower, lower_label) = pick("lower", &self.lower, &defaults.lower);
-        let (auto, auto_label) = pick("auto", &self.auto, &defaults.auto);
-        ResolvedKeys {
-            raise,
-            lower,
-            auto,
-            raise_label,
-            lower_label,
-            auto_label,
-        }
+    /// Returns the Windows virtual-key code.
+    pub fn code(&self) -> u16 {
+        self.code
+    }
+
+    /// Returns the trimmed display name.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+impl Serialize for ElevationKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.label)
+    }
+}
+
+impl<'de> Deserialize<'de> for ElevationKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::from_name(&name)
+            .ok_or_else(|| de::Error::custom(format!("unknown elevation key {name:?}")))
     }
 }
 
@@ -137,8 +134,10 @@ impl ElevationKeys {
 pub struct ElevationConfig {
     /// Turns manual elevation on. Disabled by default.
     pub enabled: bool,
-    /// Highest floor a part can be raised to. The default is `3`.
-    pub max_floor: i32,
+    /// Highest floor a part can be raised to.
+    /// The default is `3`.
+    #[serde(deserialize_with = "deserialize_max_floor")]
+    max_floor: i32,
     /// Moves mounted modules (guns and similar) together with the part being changed.
     ///
     /// Without it a gun can end up buried under a raised block. Enabled by default.
@@ -147,6 +146,26 @@ pub struct ElevationConfig {
     pub child_offset: i32,
     /// Keys used for raising, lowering and returning to automatic elevation.
     pub keys: ElevationKeys,
+}
+
+fn deserialize_max_floor<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i32, D::Error> {
+    let floor = i32::deserialize(deserializer)?;
+    if floor < 0 {
+        return Err(de::Error::custom("max_floor must be non-negative"));
+    }
+    Ok(floor)
+}
+
+impl ElevationConfig {
+    /// Returns the validated maximum floor.
+    pub fn max_floor(&self) -> i32 {
+        self.max_floor
+    }
+
+    /// Applies a floor offset within the allowed elevation range.
+    pub fn offset_floor(&self, floor: i32, offset: i32) -> i32 {
+        floor.saturating_add(offset).clamp(0, self.max_floor)
+    }
 }
 
 impl Default for ElevationConfig {
@@ -172,19 +191,38 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(config.max_floor, 3);
         assert!(config.sync_children);
-        assert_eq!(config.keys.resolve(), ElevationKeys::default().resolve());
+        assert_eq!(config.keys, ElevationKeys::default());
+    }
+
+    #[test]
+    fn rejects_a_max_floor_below_the_minimum() {
+        let error = serde_json::from_str::<ElevationConfig>(r#"{"max_floor":-1}"#).unwrap_err();
+
+        assert!(error.to_string().contains("max_floor must be non-negative"));
+    }
+
+    #[test]
+    fn extreme_child_offsets_still_respect_floor_bounds() {
+        for offset in [i32::MIN, i32::MAX] {
+            let json = format!(r#"{{"child_offset":{offset}}}"#);
+            let config: ElevationConfig = serde_json::from_str(&json).unwrap();
+            let expected = if offset < 0 { 0 } else { config.max_floor() };
+
+            assert_eq!(config.offset_floor(1, config.child_offset), expected);
+        }
     }
 
     #[test]
     fn partial_keys_keep_other_defaults() {
         let config: ElevationConfig =
-            serde_json::from_str(r#"{"enabled":true,"keys":{"raise":"F5"}}"#).unwrap();
-        let keys = config.keys.resolve();
+            serde_json::from_str(r#"{"enabled":true,"keys":{"raise":" F5 "}}"#).unwrap();
+        let keys = &config.keys;
 
         assert!(config.enabled);
-        assert_eq!(keys.raise, 0x74);
-        assert_eq!(keys.lower, b'P' as u16);
-        assert_eq!(keys.auto, 0xDC);
+        assert_eq!(keys.raise.code(), 0x74);
+        assert_eq!(keys.lower.code(), b'P' as u16);
+        assert_eq!(keys.auto.code(), 0xDC);
+        assert_eq!(serde_json::to_value(keys).unwrap()["raise"], "F5");
     }
 
     #[test]
@@ -208,17 +246,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_key_names_fall_back_to_their_default() {
-        let keys = ElevationKeys {
-            raise: "Hyper".into(),
-            lower: "O".into(),
-            auto: "".into(),
-        }
-        .resolve();
+    fn rejects_invalid_key_names_when_loading_config() {
+        for (action, name) in [("raise", "Hyper"), ("lower", "F13"), ("auto", "")] {
+            let json = format!(r#"{{"keys":{{"{action}":"{name}"}}}}"#);
+            let error = serde_json::from_str::<ElevationConfig>(&json).unwrap_err();
 
-        assert_eq!(keys.raise, b'U' as u16);
-        assert_eq!(keys.raise_label, "U");
-        assert_eq!(keys.lower, b'O' as u16);
-        assert_eq!(keys.auto, 0xDC);
+            assert!(error.to_string().contains("unknown elevation key"));
+        }
     }
 }

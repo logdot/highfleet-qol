@@ -37,7 +37,7 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::config::{ElevationConfig, ResolvedKeys};
+use crate::config::ElevationConfig;
 
 const HELD_PART: *const *mut Body = 0x1_403c_0d88usize as *const *mut Body;
 const EDITOR_ACTIVE: *const u8 = 0x1_403e_f368usize as *const u8;
@@ -61,7 +61,6 @@ const SOCKET_FLAG: u8 = 1 << 2;
 
 /// `m_floor_type` bits that make the solver recompute the floor.
 const AUTO_BITS: u64 = 0x11;
-const MIN_FLOOR: i32 = 0;
 
 /// The `call 0x1400d4380` (editor label pass) that is wrapped, as `E8 rel32`.
 const HOOK_SITE: usize = 0x1_4030_3fb4;
@@ -130,10 +129,7 @@ type RenderFn = unsafe extern "win64" fn(
 ) -> i32;
 
 struct Settings {
-    max_floor: i32,
-    sync_children: bool,
-    child_offset: i32,
-    keys: ResolvedKeys,
+    config: ElevationConfig,
     /// First lines of the readout: the title and the keys.
     header: String,
 }
@@ -146,10 +142,12 @@ thread_local! {
 
 /// Reads the settings and prepares the editor hook.
 pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> patchy::Result {
-    let keys = config.keys.resolve();
+    let keys = &config.keys;
     let header = format!(
         "ELEVATION  {} up  {} down  {} auto\n",
-        keys.raise_label, keys.lower_label, keys.auto_label
+        keys.raise.label(),
+        keys.lower.label(),
+        keys.auto.label()
     );
 
     session.detour_trampoline(HOOK_SITE, HOOK_SIZE, |_| {
@@ -168,23 +166,19 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
         Ok(trampoline)
     })?;
 
-    let settings = Settings {
-        max_floor: config.max_floor.max(MIN_FLOOR),
-        sync_children: config.sync_children,
-        child_offset: config.child_offset,
-        keys,
-        header,
-    };
     log::info!(
         "Elevation prepared: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {})",
-        settings.keys.raise_label,
-        settings.keys.lower_label,
-        settings.keys.auto_label,
-        settings.max_floor,
-        settings.sync_children,
-        settings.child_offset,
+        keys.raise.label(),
+        keys.lower.label(),
+        keys.auto.label(),
+        config.max_floor(),
+        config.sync_children,
+        config.child_offset,
     );
-    let _ = SETTINGS.set(settings);
+    let _ = SETTINGS.set(Settings {
+        config: config.clone(),
+        header,
+    });
     Ok(())
 }
 
@@ -288,16 +282,12 @@ unsafe fn for_each_linked(parent: *mut Body, mut visit: impl FnMut(*mut Body, bo
 
 // --- changing the elevation -----------------------------------------------------------------
 
-fn clamp(value: i32, settings: &Settings) -> i32 {
-    value.clamp(MIN_FLOOR, settings.max_floor)
-}
-
-unsafe fn adjust(delta: i32, settings: &Settings, original: &mut HashMap<usize, u64>) {
+unsafe fn adjust(delta: i32, config: &ElevationConfig, original: &mut HashMap<usize, u64>) {
     let Some(part) = held_part() else { return };
 
     original.entry(part.addr()).or_insert((*part).floor_type);
     let before = (*part).floor;
-    let next = clamp(before + delta, settings);
+    let next = config.offset_floor(before, delta);
     (*part).floor_type &= !AUTO_BITS;
     (*part).floor = next;
     log::debug!(
@@ -307,12 +297,12 @@ unsafe fn adjust(delta: i32, settings: &Settings, original: &mut HashMap<usize, 
         (*part).floor_type
     );
 
-    if settings.sync_children {
+    if config.sync_children {
         for_each_linked(part, |child, socket| {
             if socket {
                 return;
             }
-            let target = clamp(next + settings.child_offset, settings);
+            let target = config.offset_floor(next, config.child_offset);
             log::debug!(
                 "Elevation:   mounted {child:p} {}: floor {} -> {target}",
                 oid(child),
@@ -370,16 +360,17 @@ unsafe fn game_has_focus() -> bool {
 
 /// Applies the keys that were newly pressed since the last call.
 unsafe fn poll_keys(settings: &Settings, state: &mut KeyState) {
+    let config = &settings.config;
     let focused = game_has_focus();
-    let lower = focused && key_down(settings.keys.lower);
-    let raise = focused && key_down(settings.keys.raise);
-    let auto = focused && key_down(settings.keys.auto);
+    let lower = focused && key_down(config.keys.lower.code());
+    let raise = focused && key_down(config.keys.raise.code());
+    let auto = focused && key_down(config.keys.auto.code());
 
     if lower && !state.lower_was {
-        adjust(-1, settings, &mut state.original);
+        adjust(-1, config, &mut state.original);
     }
     if raise && !state.raise_was {
-        adjust(1, settings, &mut state.original);
+        adjust(1, config, &mut state.original);
     }
     if auto && !state.auto_was {
         restore(&mut state.original);

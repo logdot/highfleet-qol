@@ -136,9 +136,13 @@ Lets you raise and lower the elevation (floor) of the part you hold in the ship 
 ```
 
 * `max_floor`: the highest floor a part can be raised to (default `3`).
+  It must be a non-negative integer.
 * While holding a part, `raise` and `lower` change its floor by one. `auto` gives it back to the game's automatic elevation (then drop the part so the game recomputes it).
-* `sync_children`: mounted modules (guns and similar) follow the part. `child_offset` is their floor relative to the mount (`0` same floor, `1` one above).
-* Keys are a single letter or digit, `F1` to `F12`, or a name: `Backslash`, `Tab`, `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket`, `RightBracket`. Write `Backslash` rather than `"\\"`. An unknown name is reported in the log and that key keeps its default.
+* `sync_children`: mounted modules (guns and similar) follow the part.
+  `child_offset` is their floor relative to the mount (`0` is the same floor, `1` is one above).
+  The resulting floor stays between `0` and `max_floor`.
+* Keys are a single letter or digit, `F1` to `F12`, or a name: `Backslash`, `Tab`, `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket`, `RightBracket`.
+  An invalid key name or negative `max_floor` causes QoL to log a config error and use its defaults for that run.
 
 ## Aircraft settings
 
