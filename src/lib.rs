@@ -223,11 +223,6 @@ unsafe extern "C" fn init() -> bool {
         return false;
     }
 
-    #[cfg(not(feature = "1_151"))]
-    if config.elevation.enabled {
-        elevation::start();
-    }
-
     true
 }
 

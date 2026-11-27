@@ -4,17 +4,8 @@
 //! back to the game's automatic elevation solver. A readout shows the held part, its floor and its
 //! mounted modules.
 //!
-//! Two ways to run, chosen by the `hint` setting:
-//!
-//! * **native** (default): the `call 0x1400d4380` at `0x140303fb4` (E8 rel32, the editor's label
-//!   pass, which draws into the same offscreen target the game flushes right afterwards) is wrapped
-//!   by a trampoline: original call, then [`native_tick`]. That runs on the game thread once per
-//!   editor frame, so it polls the keys, writes to the held part and draws the readout with the
-//!   game's own font code. No extra threads and no extra window.
-//! * **window**: a worker thread polls the keys and an overlay thread draws the readout in a
-//!   transparent window above the game.
-//!
-//! With `hint: off` the native hook still handles the keys but draws nothing.
+//! The trampoline runs [`native_tick`] on the game thread after the editor label pass and before
+//! the game flushes the draw target, so key polling, floor edits, and drawing happen on that thread.
 //!
 //! Addresses and offsets (Steam 1.163, image base `0x140000000`):
 //!
@@ -31,25 +22,16 @@
 //! floor 3. Parts with neither keep the floor stored in the ship.
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},
-    sync::{Mutex, OnceLock},
-    thread,
-    time::Duration,
+    sync::OnceLock,
 };
 
 use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, StackAlignment, Trampoline};
 
 use windows_sys::Win32::{
-    Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
-    Graphics::Gdi::{
-        BeginPaint, CreateFontA, CreateSolidBrush, DeleteObject, DrawTextA, EndPaint, FillRect,
-        GetDC, InvalidateRect, ReleaseDC, SelectObject, SetBkMode, SetTextColor,
-        ANTIALIASED_QUALITY, DEFAULT_CHARSET, DT_CALCRECT, FF_MODERN, FIXED_PITCH, FW_BOLD, HDC,
-        PAINTSTRUCT, TRANSPARENT,
-    },
     System::{
-        LibraryLoader::GetModuleHandleA,
         Memory::{
             VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE_READWRITE,
             PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READWRITE, PAGE_WRITECOPY,
@@ -58,18 +40,11 @@ use windows_sys::Win32::{
     },
     UI::{
         Input::KeyboardAndMouse::GetAsyncKeyState,
-        WindowsAndMessaging::{
-            CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect, GetForegroundWindow,
-            GetMessageA, GetWindowThreadProcessId, LoadCursorW, RegisterClassA,
-            SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TranslateMessage,
-            HWND_TOPMOST, IDC_ARROW, LWA_COLORKEY, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
-            WM_ERASEBKGND, WM_PAINT, WM_TIMER, WNDCLASSA, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
-        },
+        WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
     },
 };
 
-use crate::config::{ElevationConfig, ElevationHint, ResolvedKeys};
+use crate::config::{ElevationConfig, ResolvedKeys};
 
 const HELD_PART: usize = 0x1_403c_0d88;
 const EDITOR_ACTIVE: usize = 0x1_403e_f368;
@@ -86,9 +61,6 @@ const SLOT_BODY: usize = 0x58;
 /// `m_floor_type` bits that make the solver recompute the floor.
 const AUTO_BITS: u64 = 0x11;
 const MIN_FLOOR: i32 = 0;
-
-/// Pixel colour that is drawn as transparent in the overlay window.
-const COLOR_KEY: COLORREF = 0x00ff_00ff;
 
 /// The `call 0x1400d4380` (editor label pass) that is wrapped, as `E8 rel32`.
 const HOOK_SITE: usize = 0x1_4030_3fb4;
@@ -143,16 +115,15 @@ struct Settings {
     keys: ResolvedKeys,
     /// First lines of the readout: the title and the keys.
     header: String,
-    hint: ElevationHint,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
-/// Key and part state of the native hook, which only ever runs on the game thread.
-static NATIVE_STATE: OnceLock<Mutex<KeyState>> = OnceLock::new();
-static STATUS: Mutex<String> = Mutex::new(String::new());
 
-/// Reads the settings and prepares the editor hook unless `window` mode was selected.
-/// The window and worker threads are started separately; see [`start`].
+thread_local! {
+    static KEY_STATE: RefCell<KeyState> = RefCell::new(KeyState::default());
+}
+
+/// Reads the settings and prepares the editor hook.
 pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> patchy::Result {
     let keys = config.keys.resolve();
     let header = format!(
@@ -160,24 +131,21 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
         keys.raise_label, keys.lower_label, keys.auto_label
     );
 
-    if config.hint != ElevationHint::Window {
-        session.detour_trampoline(HOOK_SITE, HOOK_SIZE, |_| {
-            let mut trampoline = Trampoline::new();
-            // The original call site provides aligned RSP and shadow space.
-            trampoline.absolute_call(HOOK_TARGET as *const ());
-            trampoline.call(CallBridge {
-                callback: native_tick as *const (),
-                incoming_stack: StackAlignment::Aligned16,
-                flags: FlagPolicy::Preserve,
-                keep_return: KeepReturn::Neither,
-                before_call: &[],
-                after_call: &[],
-            });
-            trampoline.relative_jump(HOOK_SITE + HOOK_SIZE);
-            Ok(trampoline)
-        })?;
-        let _ = NATIVE_STATE.set(Mutex::new(KeyState::default()));
-    }
+    session.detour_trampoline(HOOK_SITE, HOOK_SIZE, |_| {
+        let mut trampoline = Trampoline::new();
+        // The original call site provides aligned RSP and shadow space.
+        trampoline.absolute_call(HOOK_TARGET as *const ());
+        trampoline.call(CallBridge {
+            callback: native_tick as *const (),
+            incoming_stack: StackAlignment::Aligned16,
+            flags: FlagPolicy::Preserve,
+            keep_return: KeepReturn::Neither,
+            before_call: &[],
+            after_call: &[],
+        });
+        trampoline.relative_jump(HOOK_SITE + HOOK_SIZE);
+        Ok(trampoline)
+    })?;
 
     let settings = Settings {
         max_floor: config.max_floor.max(MIN_FLOOR),
@@ -185,45 +153,18 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
         child_offset: config.child_offset,
         keys,
         header,
-        hint: config.hint,
     };
     log::info!(
-        "Elevation prepared: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {}, hint {:?})",
+        "Elevation prepared: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {})",
         settings.keys.raise_label,
         settings.keys.lower_label,
         settings.keys.auto_label,
         settings.max_floor,
         settings.sync_children,
         settings.child_offset,
-        settings.hint
     );
     let _ = SETTINGS.set(settings);
     Ok(())
-}
-
-/// Starts the key thread and the overlay window when the hint is `window`. The native hook needs
-/// no threads, so this does nothing for the other modes.
-pub unsafe fn start() {
-    let Some(settings) = SETTINGS.get() else {
-        return;
-    };
-    if settings.hint != ElevationHint::Window {
-        return;
-    }
-
-    if let Err(error) = thread::Builder::new()
-        .name("qol-elevation".into())
-        .spawn(|| unsafe { worker() })
-    {
-        log::error!("Elevation: unable to start the key thread: {error}");
-        return;
-    }
-    if let Err(error) = thread::Builder::new()
-        .name("qol-elevation-overlay".into())
-        .spawn(|| unsafe { overlay_thread() })
-    {
-        log::error!("Elevation: unable to start the overlay thread: {error}");
-    }
 }
 
 // --- the native hook ------------------------------------------------------------------------
@@ -234,20 +175,18 @@ unsafe extern "C" fn native_tick() {
     let Some(settings) = SETTINGS.get() else {
         return;
     };
-    let Some(state) = NATIVE_STATE.get() else {
-        return;
-    };
-    if let Ok(mut state) = state.lock() {
-        poll_keys(settings, &mut state);
-    }
-    if settings.hint == ElevationHint::Native {
-        draw_hint(settings);
-    }
+
+    KEY_STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            poll_keys(settings, &mut state);
+        }
+    });
+    draw_hint(settings);
 }
 
 /// Draws the readout with the game's own text code. Fonts are shared objects that every caller
 /// restyles before use, so the style is saved and put back.
-unsafe fn draw_hint(_settings: &Settings) {
+unsafe fn draw_hint(settings: &Settings) {
     let manager: *mut c_void = read(MEDIA_RES);
     if manager.is_null() {
         return;
@@ -258,7 +197,7 @@ unsafe fn draw_hint(_settings: &Settings) {
         return;
     }
 
-    let mut text = build_status();
+    let mut text = build_status(settings);
     let lines = text
         .lines()
         .take(MAX_HINT_LINES)
@@ -497,25 +436,10 @@ unsafe fn poll_keys(settings: &Settings, state: &mut KeyState) {
     state.auto_was = auto;
 }
 
-unsafe fn worker() {
-    let Some(settings) = SETTINGS.get() else {
-        return;
-    };
-    let mut state = KeyState::default();
-
-    loop {
-        thread::sleep(Duration::from_millis(15));
-        poll_keys(settings, &mut state);
-    }
-}
-
 // --- on-screen readout ----------------------------------------------------------------------
 
-unsafe fn build_status() -> String {
-    let mut status = SETTINGS
-        .get()
-        .map(|settings| settings.header.clone())
-        .unwrap_or_default();
+unsafe fn build_status(settings: &Settings) -> String {
+    let mut status = settings.header.clone();
 
     let Some(part) = held_part() else {
         status.push_str("holding: -");
@@ -542,163 +466,4 @@ unsafe fn build_status() -> String {
         ));
     });
     status
-}
-
-unsafe fn make_font() -> *mut core::ffi::c_void {
-    CreateFontA(
-        18,
-        0,
-        0,
-        0,
-        FW_BOLD as i32,
-        0,
-        0,
-        0,
-        DEFAULT_CHARSET as u32,
-        0,
-        0,
-        ANTIALIASED_QUALITY as u32,
-        (FIXED_PITCH | FF_MODERN) as u32,
-        c"Consolas".as_ptr().cast(),
-    )
-}
-
-unsafe fn draw_text(dc: HDC, text: &mut [u8], rect: &mut RECT, flags: u32) {
-    DrawTextA(dc, text.as_mut_ptr(), text.len() as i32, rect, flags);
-}
-
-unsafe extern "system" fn overlay_proc(
-    window: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match message {
-        WM_TIMER => {
-            if !editor_active() {
-                ShowWindow(window, SW_HIDE);
-                return 0;
-            }
-            let status = build_status();
-            let mut text = status.clone().into_bytes();
-            if let Ok(mut shared) = STATUS.lock() {
-                *shared = status;
-            }
-
-            let dc = GetDC(window);
-            let font = make_font();
-            let old = SelectObject(dc, font);
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: 10,
-                bottom: 10,
-            };
-            draw_text(dc, &mut text, &mut rect, DT_CALCRECT);
-            SelectObject(dc, old);
-            DeleteObject(font);
-            ReleaseDC(window, dc);
-
-            SetWindowPos(
-                window,
-                HWND_TOPMOST,
-                12,
-                12,
-                rect.right + 8,
-                rect.bottom + 6,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            InvalidateRect(window, std::ptr::null(), 1);
-            0
-        }
-        WM_ERASEBKGND => {
-            let mut rect: RECT = std::mem::zeroed();
-            GetClientRect(window, &mut rect);
-            let brush = CreateSolidBrush(COLOR_KEY);
-            FillRect(wparam as HDC, &rect, brush);
-            DeleteObject(brush);
-            1
-        }
-        WM_PAINT => {
-            let mut paint: PAINTSTRUCT = std::mem::zeroed();
-            let dc = BeginPaint(window, &mut paint);
-            let font = make_font();
-            let old = SelectObject(dc, font);
-            SetBkMode(dc, TRANSPARENT as i32);
-
-            let status = STATUS.lock().map(|s| s.clone()).unwrap_or_default();
-            let mut text = status.into_bytes();
-            let mut rect = RECT {
-                left: 2,
-                top: 2,
-                right: 2000,
-                bottom: 2000,
-            };
-            SetTextColor(dc, 0x000a_0a0a);
-            draw_text(dc, &mut text, &mut rect, 0);
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: 2000,
-                bottom: 2000,
-            };
-            SetTextColor(dc, 0x0078_ff78);
-            draw_text(dc, &mut text, &mut rect, 0);
-
-            SelectObject(dc, old);
-            DeleteObject(font);
-            EndPaint(window, &paint);
-            0
-        }
-        _ => DefWindowProcA(window, message, wparam, lparam),
-    }
-}
-
-/// Creates the click-through overlay and pumps its messages. The window must be created and
-/// serviced on the same thread, so this never returns.
-unsafe fn overlay_thread() {
-    let instance = GetModuleHandleA(std::ptr::null());
-    let class_name = c"HFElevationOverlay";
-    let class = WNDCLASSA {
-        style: 0,
-        lpfnWndProc: Some(overlay_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: std::ptr::null_mut(),
-        hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
-        hbrBackground: std::ptr::null_mut(),
-        lpszMenuName: std::ptr::null(),
-        lpszClassName: class_name.as_ptr().cast(),
-    };
-    RegisterClassA(&class);
-
-    let window = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        class_name.as_ptr().cast(),
-        c"".as_ptr().cast(),
-        WS_POPUP,
-        12,
-        12,
-        400,
-        60,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        instance,
-        std::ptr::null(),
-    );
-    if window.is_null() {
-        log::error!("Elevation: unable to create the overlay window");
-        return;
-    }
-
-    SetLayeredWindowAttributes(window, COLOR_KEY, 0, LWA_COLORKEY);
-    SetTimer(window, 1, 100, None);
-    log::info!("Elevation: overlay created");
-
-    let mut message: MSG = std::mem::zeroed();
-    while GetMessageA(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
-        TranslateMessage(&message);
-        DispatchMessageA(&message);
-    }
 }
