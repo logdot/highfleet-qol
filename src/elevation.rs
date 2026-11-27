@@ -13,10 +13,6 @@
 //! |---------------------------------------|-----------------------------------------|
 //! | held part `Body*` (null if none)      | `0x1403c0d88`                           |
 //! | editor-active flag                    | `0x1403ef368`                           |
-//! | `m_floor_type` bitmask / `m_floor`    | `Body + 0x9b0` / `Body + 0x9b8`         |
-//! | `m_oid` string / its length           | `Body + 0x190` / `Body + 0x1a0`         |
-//! | slot vector begin / end               | `Body + 0x350` / `Body + 0x358`         |
-//! | slot flags (bit 2 = socket) / body    | `Slot + 0xb8` / `Slot + 0x58`           |
 //!
 //! `m_floor_type` bit `0x01` makes the solver recompute the floor and `0x10` makes it force
 //! floor 3. Parts with neither keep the floor stored in the ship.
@@ -24,20 +20,17 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{c_char, CStr, CString},
+    mem::offset_of,
+    ptr,
     sync::OnceLock,
 };
 
+use highfleet::v1_163::Body;
 use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, StackAlignment, Trampoline};
 
 use windows_sys::Win32::{
-    System::{
-        Memory::{
-            VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE_READWRITE,
-            PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READWRITE, PAGE_WRITECOPY,
-        },
-        Threading::GetCurrentProcessId,
-    },
+    System::Threading::GetCurrentProcessId,
     UI::{
         Input::KeyboardAndMouse::GetAsyncKeyState,
         WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
@@ -46,17 +39,25 @@ use windows_sys::Win32::{
 
 use crate::config::{ElevationConfig, ResolvedKeys};
 
-const HELD_PART: usize = 0x1_403c_0d88;
-const EDITOR_ACTIVE: usize = 0x1_403e_f368;
+const HELD_PART: *const *mut Body = 0x1_403c_0d88usize as *const *mut Body;
+const EDITOR_ACTIVE: *const u8 = 0x1_403e_f368usize as *const u8;
 
-const OFF_OID: usize = 0x190;
-const OFF_OID_LEN: usize = 0x1a0;
-const OFF_FLOOR_TYPE: usize = 0x9b0;
-const OFF_FLOOR: usize = 0x9b8;
-const OFF_SLOTS_BEGIN: usize = 0x350;
-const OFF_SLOTS_END: usize = 0x358;
-const SLOT_FLAGS: usize = 0xb8;
-const SLOT_BODY: usize = 0x58;
+// Partial Steam 1.163 layout. highfleet-rs exposes the slot entries as ISerializable pointers.
+#[repr(C)]
+struct Slot {
+    _unknown_00: [u8; 0x58],
+    body: *mut Body,
+    _unknown_60: [u8; 0x58],
+    flags: u8,
+}
+
+const _: () = {
+    assert!(offset_of!(Slot, body) == 0x58);
+    assert!(offset_of!(Slot, flags) == 0xb8);
+};
+
+// Slot links with bit 2 set are sockets, not modules mounted on this part.
+const SOCKET_FLAG: u8 = 1 << 2;
 
 /// `m_floor_type` bits that make the solver recompute the floor.
 const AUTO_BITS: u64 = 0x11;
@@ -68,7 +69,8 @@ const HOOK_TARGET: usize = 0x1_400d_4380;
 const HOOK_SIZE: usize = 5;
 
 /// The global `hgeResourceManager*` (`Media.res`).
-const MEDIA_RES: usize = 0x1_43a1_19e8;
+const MEDIA_RES: *const *mut HgeResourceManager =
+    0x1_43a1_19e8usize as *const *mut HgeResourceManager;
 /// `hgeResourceManager::GetFont(manager, name)`.
 const GET_FONT: usize = 0x1_4017_03e0;
 /// `(name, scale, blend, colour)`: gets a font and sets its scale, blend and colour (if non-zero).
@@ -76,9 +78,28 @@ const STYLE_FONT: usize = 0x1_401a_8710;
 /// The game's modified `hgeFont::Render(font, x, y, align, text, *out_w, *out_h, ?, angle)`.
 const RENDER: usize = 0x1_4016_eb40;
 
-const OFF_FONT_SCALE: usize = 0x100c;
-const OFF_FONT_COLOR: usize = 0x1020;
-const OFF_FONT_BLEND: usize = 0x1028;
+// Only passed back to the game; no resource-manager fields are accessed.
+#[repr(C)]
+struct HgeResourceManager {
+    _opaque: [u8; 0],
+}
+
+// Partial layout of the game's modified hgeFont, not modeled in highfleet-rs.
+#[repr(C)]
+struct HgeFont {
+    _unknown_0000: [u8; 0x100c],
+    scale: f32,
+    _unknown_1010: [u8; 0x10],
+    color: u32,
+    _unknown_1024: [u8; 4],
+    blend: i32,
+}
+
+const _: () = {
+    assert!(offset_of!(HgeFont, scale) == 0x100c);
+    assert!(offset_of!(HgeFont, color) == 0x1020);
+    assert!(offset_of!(HgeFont, blend) == 0x1028);
+};
 
 /// A small monospace pixel-style font from the game's own list (see hf_notes, fonts.md).
 const HINT_FONT: &CStr = c"fixed_16";
@@ -94,10 +115,10 @@ const ALIGN_RIGHT: u32 = 1;
 /// Longest readout, so a part with very many mounted modules cannot run off the screen.
 const MAX_HINT_LINES: usize = 12;
 
-type GetFontFn = unsafe extern "win64" fn(*mut c_void, *const c_char) -> *mut c_void;
-type StyleFn = unsafe extern "win64" fn(*const c_char, f32, i32, u32) -> *mut c_void;
+type GetFontFn = unsafe extern "win64" fn(*mut HgeResourceManager, *const c_char) -> *mut HgeFont;
+type StyleFn = unsafe extern "win64" fn(*const c_char, f32, i32, u32) -> *mut HgeFont;
 type RenderFn = unsafe extern "win64" fn(
-    *mut c_void,
+    *mut HgeFont,
     f32,
     f32,
     u32,
@@ -187,7 +208,7 @@ unsafe extern "C" fn native_tick() {
 /// Draws the readout with the game's own text code. Fonts are shared objects that every caller
 /// restyles before use, so the style is saved and put back.
 unsafe fn draw_hint(settings: &Settings) {
-    let manager: *mut c_void = read(MEDIA_RES);
+    let manager = MEDIA_RES.read();
     if manager.is_null() {
         return;
     }
@@ -207,10 +228,9 @@ unsafe fn draw_hint(settings: &Settings) {
     text = lines.replace(['@', '\0'], " ");
     let Ok(text) = CString::new(text) else { return };
 
-    let base = font as usize;
-    let old_scale: f32 = read(base + OFF_FONT_SCALE);
-    let old_color: u32 = read(base + OFF_FONT_COLOR);
-    let old_blend: i32 = read(base + OFF_FONT_BLEND);
+    let old_scale = (*font).scale;
+    let old_color = (*font).color;
+    let old_blend = (*font).blend;
 
     let style: StyleFn = std::mem::transmute(STYLE_FONT);
     style(HINT_FONT.as_ptr(), 1.0, HINT_BLEND, HINT_COLOR);
@@ -231,100 +251,38 @@ unsafe fn draw_hint(settings: &Settings) {
 
 // --- reading the game's memory --------------------------------------------------------------
 
-unsafe fn readable(address: usize, length: usize) -> bool {
-    let mut info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
-    if VirtualQuery(
-        address as *const _,
-        &mut info,
-        std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-    ) == 0
-    {
-        return false;
-    }
-    if info.State != MEM_COMMIT || info.Protect & (PAGE_NOACCESS | PAGE_GUARD) != 0 {
-        return false;
-    }
-    // Image data is usually write-copy, heap memory is read-write.
-    let writable =
-        PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if info.Protect & writable == 0 {
-        return false;
-    }
-    address + length <= info.BaseAddress as usize + info.RegionSize
-}
-
-unsafe fn read<T: Copy>(address: usize) -> T {
-    (address as *const T).read_unaligned()
-}
-
-unsafe fn editor_active() -> bool {
-    std::ptr::read_volatile(EDITOR_ACTIVE as *const u8) != 0
-}
-
-/// A part always has a non-empty `m_oid` of at most 64 characters.
-unsafe fn looks_like_body(part: usize) -> bool {
-    if part == 0 || !readable(part, OFF_FLOOR + 4) {
-        return false;
-    }
-    let length: u64 = read(part + OFF_OID_LEN);
-    length != 0 && length <= 64
-}
-
-/// The part held in the editor, if it looks like a valid `Body`.
-unsafe fn held_part() -> Option<usize> {
-    if !editor_active() {
+/// The held body is borrowed from the editor on the game thread, where the game keeps it live.
+unsafe fn held_part() -> Option<*mut Body> {
+    if EDITOR_ACTIVE.read_volatile() == 0 {
         return None;
     }
-    let part = std::ptr::read_volatile(HELD_PART as *const usize);
-    looks_like_body(part).then_some(part)
+    let part = HELD_PART.read_volatile();
+    (!part.is_null()).then_some(part)
 }
 
-unsafe fn oid(part: usize) -> String {
-    let length: u64 = read(part + OFF_OID_LEN);
-    let capacity: u64 = read(part + OFF_OID_LEN + 8);
-    let length = length.min(40) as usize;
-    let text = if capacity >= 16 {
-        let pointer: usize = read(part + OFF_OID);
-        if !readable(pointer, length) {
-            return "?".into();
-        }
-        pointer
-    } else {
-        part + OFF_OID
-    };
-    String::from_utf8_lossy(std::slice::from_raw_parts(text as *const u8, length)).into_owned()
+unsafe fn oid(part: *const Body) -> String {
+    let bytes = (*part).oid.get_string().as_bytes();
+    String::from_utf8_lossy(&bytes[..bytes.len().min(40)]).into_owned()
 }
 
 /// Calls `visit(child, is_socket)` for every part linked to `parent` through its slot list.
 ///
 /// Slots without the socket flag (bit 2) are mounted modules, the ones the game's floor solver
 /// moves together with their mount.
-unsafe fn for_each_linked(parent: usize, mut visit: impl FnMut(usize, bool)) {
-    if !readable(parent + OFF_SLOTS_BEGIN, 16) {
-        return;
-    }
-    let begin: usize = read(parent + OFF_SLOTS_BEGIN);
-    let end: usize = read(parent + OFF_SLOTS_END);
-    if begin == 0 || end < begin || (end - begin) / 8 > 64 {
-        return;
-    }
+unsafe fn for_each_linked(parent: *mut Body, mut visit: impl FnMut(*mut Body, bool)) {
+    // The slot vector remains live and unchanged while the visitor reads or updates floors.
+    for &entry in (*parent).slots.as_slice() {
+        let slot = entry.cast::<Slot>();
+        if slot.is_null() {
+            continue;
+        }
 
-    let mut entry = begin;
-    while entry < end {
-        if !readable(entry, 8) {
-            return;
-        }
-        let slot: usize = read(entry);
-        entry += 8;
-        if slot == 0 || !readable(slot, SLOT_BODY + 8) {
+        let child = (*slot).body;
+        if child.is_null() || ptr::eq(child, parent) {
             continue;
         }
-        let socket = read::<u8>(slot + SLOT_FLAGS) & 4 != 0;
-        let child: usize = read(slot + SLOT_BODY);
-        if child == 0 || child == parent || !looks_like_body(child) {
-            continue;
-        }
-        visit(child, socket);
+
+        visit(child, (*slot).flags & SOCKET_FLAG != 0);
     }
 }
 
@@ -336,19 +294,17 @@ fn clamp(value: i32, settings: &Settings) -> i32 {
 
 unsafe fn adjust(delta: i32, settings: &Settings, original: &mut HashMap<usize, u64>) {
     let Some(part) = held_part() else { return };
-    let floor_type = (part + OFF_FLOOR_TYPE) as *mut u64;
-    let floor = (part + OFF_FLOOR) as *mut i32;
 
-    original.entry(part).or_insert(*floor_type);
-    let before = *floor;
+    original.entry(part.addr()).or_insert((*part).floor_type);
+    let before = (*part).floor;
     let next = clamp(before + delta, settings);
-    *floor_type &= !AUTO_BITS;
-    *floor = next;
+    (*part).floor_type &= !AUTO_BITS;
+    (*part).floor = next;
     log::debug!(
-        "Elevation: part {part:#x} {}: floor {before} -> {next}, floor_type {:#x} -> {:#x}",
+        "Elevation: part {part:p} {}: floor {before} -> {next}, floor_type {:#x} -> {:#x}",
         oid(part),
-        original[&part],
-        *floor_type
+        original[&part.addr()],
+        (*part).floor_type
     );
 
     if settings.sync_children {
@@ -356,14 +312,13 @@ unsafe fn adjust(delta: i32, settings: &Settings, original: &mut HashMap<usize, 
             if socket {
                 return;
             }
-            let child_floor = (child + OFF_FLOOR) as *mut i32;
             let target = clamp(next + settings.child_offset, settings);
             log::debug!(
-                "Elevation:   mounted {child:#x} {}: floor {} -> {target}",
+                "Elevation:   mounted {child:p} {}: floor {} -> {target}",
                 oid(child),
-                *child_floor
+                (*child).floor
             );
-            *child_floor = target;
+            (*child).floor = target;
         });
     }
 }
@@ -372,23 +327,21 @@ unsafe fn adjust(delta: i32, settings: &Settings, original: &mut HashMap<usize, 
 /// recomputes them the next time the ship is edited (drop the part to trigger that).
 unsafe fn restore(original: &mut HashMap<usize, u64>) {
     let Some(part) = held_part() else { return };
-    let floor_type = (part + OFF_FLOOR_TYPE) as *mut u64;
-    let floor = (part + OFF_FLOOR) as *mut i32;
 
-    original.remove(&part);
+    original.remove(&part.addr());
     // The "force floor 3" bit would pin the part again.
-    *floor_type = (*floor_type | 0x1) & !0x10;
-    let before = *floor;
-    *floor = 0;
+    (*part).floor_type = ((*part).floor_type | 0x1) & !0x10;
+    let before = (*part).floor;
+    (*part).floor = 0;
     log::debug!(
-        "Elevation: part {part:#x} {}: back to auto (floor {before} -> 0), floor_type {:#x}",
+        "Elevation: part {part:p} {}: back to auto (floor {before} -> 0), floor_type {:#x}",
         oid(part),
-        *floor_type
+        (*part).floor_type
     );
 
     for_each_linked(part, |child, socket| {
         if !socket {
-            *((child + OFF_FLOOR) as *mut i32) = 0;
+            (*child).floor = 0;
         }
     });
 }
@@ -446,8 +399,8 @@ unsafe fn build_status(settings: &Settings) -> String {
         return status;
     };
 
-    let floor_type: u64 = read(part + OFF_FLOOR_TYPE);
-    let floor: i32 = read(part + OFF_FLOOR);
+    let floor_type = (*part).floor_type;
+    let floor = (*part).floor;
     status.push_str(&format!(
         "holding: {}  floor={floor}  type={floor_type:#x} ({})",
         oid(part),
@@ -462,8 +415,55 @@ unsafe fn build_status(settings: &Settings) -> String {
             "\n  {} {}  floor={}",
             if socket { "neighbour" } else { "mounted  " },
             oid(child),
-            read::<i32>(child + OFF_FLOOR)
+            (*child).floor
         ));
     });
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use highfleet::general::CVec;
+    use std::mem::MaybeUninit;
+
+    #[test]
+    fn visits_only_links_to_other_bodies_with_their_socket_status() {
+        let mut parent = MaybeUninit::<Body>::uninit();
+        let mut mounted = MaybeUninit::<Body>::uninit();
+        let mut neighbour = MaybeUninit::<Body>::uninit();
+        let parent = parent.as_mut_ptr();
+        let mounted = mounted.as_mut_ptr();
+        let neighbour = neighbour.as_mut_ptr();
+
+        let slot = |body, flags| Slot {
+            _unknown_00: [0; 0x58],
+            body,
+            _unknown_60: [0; 0x58],
+            flags,
+        };
+        let mut slots = [
+            slot(mounted, 0),
+            slot(parent, SOCKET_FLAG),
+            slot(neighbour, SOCKET_FLAG),
+            slot(ptr::null_mut(), 0),
+        ];
+        let mut entries = CVec::empty();
+        entries.insert(ptr::null_mut());
+        for slot in &mut slots {
+            entries.insert(ptr::from_mut(slot).cast());
+        }
+
+        let mut links = Vec::new();
+        unsafe {
+            // Traversal only borrows the parent's initialized slots field and never dereferences
+            // the children. Reclaim the vector without treating the rest of the Body as initialized.
+            let field = &raw mut (*parent).slots;
+            field.write(entries);
+            for_each_linked(parent, |body, socket| links.push((body, socket)));
+            field.drop_in_place();
+        }
+
+        assert_eq!(links, [(mounted, false), (neighbour, true)]);
+    }
 }
