@@ -4,8 +4,7 @@
 //! back to the game's automatic elevation solver. A readout shows the held part, its floor and its
 //! mounted modules.
 //!
-//! The trampoline runs [`native_tick`] on the game thread after the editor label pass and before
-//! the game flushes the draw target, so key polling, floor edits, and drawing happen on that thread.
+//! The trampoline runs [`on_editor_labels_drawn`] on the game thread after the editor label pass and before the game flushes the draw target, so key polling, floor edits, and drawing happen on that thread.
 //!
 //! Addresses and offsets (Steam 1.163, image base `0x140000000`):
 //!
@@ -154,7 +153,7 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
         // The original call site provides aligned RSP and shadow space.
         trampoline.absolute_call(HOOK_TARGET as *const ());
         trampoline.call(CallBridge {
-            callback: native_tick as *const (),
+            callback: on_editor_labels_drawn as *const (),
             incoming_stack: StackAlignment::Aligned16,
             flags: FlagPolicy::Preserve,
             keep_return: KeepReturn::Neither,
@@ -181,11 +180,9 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
     Ok(())
 }
 
-// --- the native hook ------------------------------------------------------------------------
-
 /// Runs once per editor frame, right after the game drew its own editor labels and before it
 /// flushes them. Handles the keys, then draws the readout into the same target.
-unsafe extern "C" fn native_tick() {
+unsafe extern "C" fn on_editor_labels_drawn() {
     let Some(settings) = SETTINGS.get() else {
         return;
     };
@@ -242,8 +239,6 @@ unsafe fn draw_hint(settings: &Settings) {
     style(HINT_FONT.as_ptr(), old_scale, old_blend, old_color);
 }
 
-// --- reading the game's memory --------------------------------------------------------------
-
 /// The held body is borrowed from the editor on the game thread, where the game keeps it live.
 unsafe fn held_part() -> Option<*mut Body> {
     if EDITOR_ACTIVE.read_volatile() == 0 {
@@ -253,7 +248,7 @@ unsafe fn held_part() -> Option<*mut Body> {
     (!part.is_null()).then_some(part)
 }
 
-unsafe fn oid(part: *const Body) -> String {
+unsafe fn display_name(part: *const Body) -> String {
     let bytes = (*part).oid.get_string().as_bytes();
     String::from_utf8_lossy(&bytes[..bytes.len().min(40)]).into_owned()
 }
@@ -279,9 +274,7 @@ unsafe fn for_each_linked(parent: *mut Body, mut visit: impl FnMut(*mut Body, bo
     }
 }
 
-// --- changing the elevation -----------------------------------------------------------------
-
-unsafe fn adjust(delta: i32, config: &ElevationConfig) {
+unsafe fn shift_floor(delta: i32, config: &ElevationConfig) {
     let Some(part) = held_part() else { return };
 
     let floor_type_before = (*part).floor_type;
@@ -291,7 +284,7 @@ unsafe fn adjust(delta: i32, config: &ElevationConfig) {
     (*part).floor = next;
     log::debug!(
         "Elevation: part {part:p} {}: floor {before} -> {next}, floor_type {:#x} -> {:#x}",
-        oid(part),
+        display_name(part),
         floor_type_before,
         (*part).floor_type
     );
@@ -304,7 +297,7 @@ unsafe fn adjust(delta: i32, config: &ElevationConfig) {
             let target = config.offset_floor(next, config.child_offset);
             log::debug!(
                 "Elevation:   mounted {child:p} {}: floor {} -> {target}",
-                oid(child),
+                display_name(child),
                 (*child).floor
             );
             (*child).floor = target;
@@ -314,7 +307,7 @@ unsafe fn adjust(delta: i32, config: &ElevationConfig) {
 
 /// Puts the held part back under the game's solver: auto bit on, floors reset to 0 so the game
 /// recomputes them the next time the ship is edited (drop the part to trigger that).
-unsafe fn restore() {
+unsafe fn return_to_auto() {
     let Some(part) = held_part() else { return };
 
     // The "force floor 3" bit would pin the part again.
@@ -323,7 +316,7 @@ unsafe fn restore() {
     (*part).floor = 0;
     log::debug!(
         "Elevation: part {part:p} {}: back to auto (floor {before} -> 0), floor_type {:#x}",
-        oid(part),
+        display_name(part),
         (*part).floor_type
     );
 
@@ -363,20 +356,18 @@ unsafe fn poll_keys(settings: &Settings, state: &mut KeyState) {
     let auto = focused && key_down(config.keys.auto.code());
 
     if lower && !state.lower_was {
-        adjust(-1, config);
+        shift_floor(-1, config);
     }
     if raise && !state.raise_was {
-        adjust(1, config);
+        shift_floor(1, config);
     }
     if auto && !state.auto_was {
-        restore();
+        return_to_auto();
     }
     state.raise_was = raise;
     state.lower_was = lower;
     state.auto_was = auto;
 }
-
-// --- on-screen readout ----------------------------------------------------------------------
 
 unsafe fn build_status(settings: &Settings) -> String {
     let mut status = settings.header.clone();
@@ -390,7 +381,7 @@ unsafe fn build_status(settings: &Settings) -> String {
     let floor = (*part).floor;
     status.push_str(&format!(
         "holding: {}  floor={floor}  type={floor_type:#x} ({})",
-        oid(part),
+        display_name(part),
         if floor_type & AUTO_BITS != 0 {
             "auto"
         } else {
@@ -401,7 +392,7 @@ unsafe fn build_status(settings: &Settings) -> String {
         status.push_str(&format!(
             "\n  {} {}  floor={}",
             if socket { "neighbour" } else { "mounted  " },
-            oid(child),
+            display_name(child),
             (*child).floor
         ));
     });
