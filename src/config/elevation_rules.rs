@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Which firing-arc rules the game uses, for [`Config::elevation_rules`](super::Config).
 ///
-/// Elevation is the height level (`m_floor`) of a part and affects which parts can block a gun's firing arc.
+/// Elevation is the height level (`m_floor`) of a part.
+/// It affects which parts can block a gun's firing arc.
 /// The KAZ module has its own arc tests.
 /// Steam 1.163 made both checks stricter than Steam 1.151.
 /// This setting only has an effect on Steam 1.163.
