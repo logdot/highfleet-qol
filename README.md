@@ -108,6 +108,42 @@ If you used the standalone `refuel.dll` or `speed.dll` mods, remove them: both p
 * **Refuel**: multiplies how fast fleets take fuel at stations (`1.0` is normal; `0` stops refuelling and a negative value drains fuel). A huge value just means "fill up at once"; the amount is still capped by free tank space and station stock. The AI fleets use the same code, so `ai_rate_multiplier` changes how fast they refuel.
 * **Speed**: replaces the map cruise speed formula `speed (m/s) = coefficient * max(TWR - subtract, 0) ^ exponent` (the editor shows km/h, which is m/s times 3.6). The 1.163 game uses `50 * sqrt(TWR - 1)`, which is `coefficient 50, subtract 1, exponent 0.5`. `"preset"` picks the curve: `"vanilla"` (the default) is the game's own curve for the running version, `"classic"` is the linear 1.151 curve `25 * TWR`, `"modern"` is the 1.163 curve, and `"custom"` uses the three numbers. Only 1.163 is supported for now, so `vanilla` is the same as `modern`. `max_kmh` caps the speed (`0` is no cap). The game caches each ship's speed, so reopen or edit a ship to see a change, and restart the game after editing the config.
 
+## Manual elevation (1.163 only)
+
+Lets you raise and lower the elevation (floor) of the part you hold in the ship editor. Elevation decides which parts can block each other's gun arcs and exhaust, so together with gun blocking you can design guns that fire over your own hull. A ship saved with manual floors loads the same without this feature. It is **off by default** and only works on Steam 1.163 (ignored on 1.151).
+
+### Turning it on and using it
+
+1. Start the game once so `Modloader/config/qol.json` has an `elevation` section (an older file is not rewritten: add the section below by hand). Close the game, set `"enabled": true`, and start the game again; settings are read once at start-up.
+2. Check `Modloader/logs/Highfleet_<date>.log` for `Elevation prepared: U raise, P lower, Backslash auto (max floor 3, ...)`.
+3. In the ship editor, pick up a part with the mouse and keep holding it.
+   Press `U` to raise its floor by one, `P` to lower it by one, or `Backslash` to return it to automatic elevation.
+   Drop the part to let the game recompute its automatic floor.
+   The in-game readout on the right shows the keys, the held part, its floor, and its mounted modules.
+   The keys only react while the game window has keyboard focus.
+4. If you used the standalone `elevation.dll`, remove it: it is replaced by this section and `elevation.ini` is no longer read.
+
+```json
+{
+  "elevation": {
+    "enabled": true,
+    "max_floor": 3,
+    "sync_children": true,
+    "child_offset": 0,
+    "keys": { "raise": "U", "lower": "P", "auto": "Backslash" }
+  }
+}
+```
+
+* `max_floor`: the highest floor a part can be raised to (default `3`).
+  It must be a non-negative integer.
+* While holding a part, `raise` and `lower` change its floor by one. `auto` gives it back to the game's automatic elevation (then drop the part so the game recomputes it).
+* `sync_children`: mounted modules (guns and similar) follow the part.
+  `child_offset` is their floor relative to the mount (`0` is the same floor, `1` is one above).
+  The resulting floor stays between `0` and `max_floor`.
+* Keys are a single letter or digit, `F1` to `F12`, or a name: `Backslash`, `Tab`, `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket`, `RightBracket`.
+  An invalid key name or negative `max_floor` causes QoL to log a config error and use its defaults for that run.
+
 ## Aircraft settings
 
 Each entry in `planes` can set the aircraft's health and available loadouts. The generated configuration contains the correct internal aircraft names to edit:

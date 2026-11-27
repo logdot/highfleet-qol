@@ -15,6 +15,8 @@ compile_error!("select at most one of the `1_151` and `1_163` features");
 pub mod config;
 mod dumpable;
 #[cfg(not(feature = "1_151"))]
+mod elevation;
+#[cfg(not(feature = "1_151"))]
 mod elevation_rules;
 #[cfg(not(feature = "1_151"))]
 mod enemy_laser_warning;
@@ -188,6 +190,11 @@ unsafe extern "C" fn init() -> bool {
 
     #[cfg(not(feature = "1_151"))]
     {
+        if config.elevation.enabled {
+            prepare_patch!(elevation::prepare(&mut patch_session, &config.elevation));
+        } else {
+            log::info!("Elevation disabled");
+        }
         if config.enable_intro {
             prepare_patch!(intro::prepare(&mut patch_session));
         }
@@ -205,6 +212,10 @@ unsafe extern "C" fn init() -> bool {
             &mut patch_session,
             config.elevation_rules
         ));
+    }
+    #[cfg(feature = "1_151")]
+    if config.elevation.enabled {
+        log::warn!("Elevation is not available on 1.151, leaving it off");
     }
 
     if let Err(error) = patch_session.install_permanently() {
