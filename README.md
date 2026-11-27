@@ -62,8 +62,10 @@ The list of toggles is:
      * Max Zoom: The maximum zoom level.
      * Min Zoom: The minimum zoom level (must be at least 0). This will be the default zoom when entering a battle.
      * Zoom levels: List of each zoom value. You can define as many zoom levels as you want. The first value is zoom level 0.
-6. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules for free-standing parts and KAZ targeting.
-   Free-standing parts do not block same-level guns, and KAZ uses its older, wider targeting cone and covered test.
+6. Elevation Rules (Steam 1.163 only): Set `"elevation_rules": "classic"` to restore the 1.151 rules.
+   These cover free-standing parts, engines and the wider KAZ intercept cone.
+   For the full 1.151 KAZ, also edit `MDL_KAZ` in `OL.seria`.
+   Set `m_mdl_sectors_type=3`, `m_mdl_sectors_threshold=0.5` and `m_mdl_sectors_shift=1`.
    The default `"vanilla"` and `"modern"` leave the 1.163 rules unchanged.
 7. Intro: On Steam 1.163, set `"enable_intro": true` in `qol.json` to restore the native startup logos.
    After the first second, a fresh key press or mouse click skips them.
