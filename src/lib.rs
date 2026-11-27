@@ -12,6 +12,7 @@ use crate::config::Config;
 #[cfg(all(feature = "1_151", feature = "1_163"))]
 compile_error!("select at most one of the `1_151` and `1_163` features");
 
+mod antitilt;
 pub mod config;
 mod dumpable;
 #[cfg(not(feature = "1_151"))]
@@ -111,6 +112,12 @@ unsafe extern "C" fn init() -> bool {
         prepare_patch!(flare_crash::patch_flare_crash(&mut patch_session));
     } else {
         log::info!("Flare crash fix disabled");
+    }
+
+    if config.enable_antitilt {
+        prepare_patch!(antitilt::patch_antitilt(&mut patch_session));
+    } else {
+        log::info!("Anti-tilt frame-time scaling disabled");
     }
 
     if config.enable_anti_wobble {

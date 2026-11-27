@@ -46,6 +46,13 @@ pub struct Config {
     /// Enabled by default. Version 1.151 does not require this fix.
     #[serde(default = "default_flare_crash_fix")]
     pub enable_flare_crash_fix: bool,
+    /// Scales the engines' anti-tilt torque by the frame time so it behaves the same at any frame
+    /// rate (no change at the vanilla 50 fps).
+    ///
+    /// Enabled by default. Turn it off if another mod already applies the same frame-time factor
+    /// to that torque (then that mod's scaling is used instead).
+    #[serde(default = "default_antitilt")]
+    pub enable_antitilt: bool,
     /// Restore the native intro, skippable with a fresh key press or click.
     /// Steam 1.163 only; disabled by default.
     #[serde(default)]
@@ -168,6 +175,10 @@ fn default_flare_crash_fix() -> bool {
     true
 }
 
+fn default_antitilt() -> bool {
+    true
+}
+
 fn default_enabled() -> bool {
     true
 }
@@ -198,6 +209,7 @@ impl Default for Config {
             enable_unblocked_guns: false,
             enable_reduced_shake: false,
             enable_flare_crash_fix: true,
+            enable_antitilt: true,
             enable_intro: false,
             enemy_laser_warning: true,
             enemy_sound_warning: true,

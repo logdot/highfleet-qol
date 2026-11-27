@@ -72,6 +72,13 @@ The list of toggles is:
    Set `"enemy_sound_warning": false` to mute the enemy pre-fire sound warning.
    Both default to `true` and work independently.
 
+## Frame-rate independence
+
+HighFleet runs one physics step per frame, and `CORE_FRAMERATE` in `Config.ini` sets both the frame rate and the step length. The engines' anti-tilt torque (`m_mdl_at` in `OL.seria`) used to be applied as a fixed impulse on every frame, so at 100 fps it pushed a ship back to level twice as hard as at the default 50 fps. QOL now scales that torque by the frame length, so the anti-tilt behaves the same at any frame rate. This does not change anything at 50 fps.
+
+The scaling is applied at `Body_AddTorque`'s entry and only to the stabiliser's own call, so a mod that retargets the same torque (`hf_wish_tilt`) can hook the stabiliser case itself and still get the frame-time factor exactly once. Set `"enable_antitilt": false` in `qol.json` if you want that mod to apply the factor instead.
+
+
 ## Refuel rate and speed curve (1.163 only)
 
 Two optional changes for the strategic map. Both **keep the game's own behaviour by default**, each has its own section in `qol.json`, and they only do anything on Steam 1.163 (on 1.151 they are ignored and a warning is logged).
