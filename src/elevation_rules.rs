@@ -2,20 +2,20 @@
 //!
 //! `classic` patches the two 1.151 floor differences:
 //!
-//! 1. `World_RaycastBodies` (`0x140239f30`) adds one to the height level of a candidate body whose
-//!    master is missing or of type 7 (free-standing parts: swivel guns, engines, legs). Steam
-//!    1.151 does not, so there such a part never blocks a gun on the same level. The `cmovz` that
-//!    keeps the plain level for other bodies becomes a plain `mov`.
-//! 2. `Ship_UpdatePartElevation` (`0x140256a90`) lifts a part that carries a gun by one level when
-//!    something next to it is higher, but tests only the gun category bit `0x20`. Steam 1.151 also
-//!    accepted the engine bit `0x100`. The `GetPartFlagsWord` call in that test is detoured so the
-//!    engine bit produces the same result.
+//! 1. `World_RaycastBodies` (`0x140239f30`) adds one to the height level of some candidate bodies.
+//!    These are bodies whose master is missing or of type 7 (free-standing parts: swivel guns, engines, legs).
+//!    Steam 1.151 does not, so there such a part never blocks a gun on the same level.
+//!    The `cmovz` that keeps the plain level for other bodies becomes a plain `mov`.
+//! 2. `Ship_UpdatePartElevation` (`0x140256a90`) lifts a part that carries a gun by one level.
+//!    It does so when something next to the part is higher, but tests only the gun category bit `0x20`.
+//!    Steam 1.151 also accepted the engine bit `0x100`.
+//!    The `GetPartFlagsWord` call in that test is detoured so the engine bit produces the same result.
 //!
-//! `classic_kaz` also points the two `movss` loads in `Weapon_FlakInterceptScan` at the 1.151
-//! half-angle: 1.2 rad, where 1.163 uses pi/4.
+//! `classic_kaz` also widens the KAZ intercept half-angle from the 1.163 pi/4 to the 1.151 1.2 rad.
+//! It points the two `movss` loads in `Weapon_FlakInterceptScan` at an existing 1.2f.
 //!
-//! The KAZ covered cone, threshold and sector ray start are `OL.seria` data
-//! (`m_mdl_sectors_type`, `m_mdl_sectors_threshold`, `m_mdl_sectors_shift`) and are not patched.
+//! The KAZ covered cone, threshold and sector ray start are `OL.seria` data and are not patched.
+//! They are `m_mdl_sectors_type`, `m_mdl_sectors_threshold` and `m_mdl_sectors_shift`.
 
 use patchy::{Condition, PatchSession, Result, Trampoline};
 
@@ -44,7 +44,8 @@ fn movss_xmm1(at: usize, target: usize) -> [u8; 8] {
     bytes
 }
 
-/// Prepares the selected patches. Does nothing for `vanilla` and `modern`.
+/// Prepares the selected patches.
+/// Does nothing for `vanilla` and `modern`.
 pub unsafe fn patch_elevation_rules(session: &mut PatchSession, rules: ElevationRules) -> Result {
     let floors = rules.has_classic_floors();
     let cone = rules.forces_classic_kaz_cone();
