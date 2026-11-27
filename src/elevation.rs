@@ -19,7 +19,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ffi::{c_char, CStr, CString},
     mem::offset_of,
     ptr,
@@ -282,10 +281,10 @@ unsafe fn for_each_linked(parent: *mut Body, mut visit: impl FnMut(*mut Body, bo
 
 // --- changing the elevation -----------------------------------------------------------------
 
-unsafe fn adjust(delta: i32, config: &ElevationConfig, original: &mut HashMap<usize, u64>) {
+unsafe fn adjust(delta: i32, config: &ElevationConfig) {
     let Some(part) = held_part() else { return };
 
-    original.entry(part.addr()).or_insert((*part).floor_type);
+    let floor_type_before = (*part).floor_type;
     let before = (*part).floor;
     let next = config.offset_floor(before, delta);
     (*part).floor_type &= !AUTO_BITS;
@@ -293,7 +292,7 @@ unsafe fn adjust(delta: i32, config: &ElevationConfig, original: &mut HashMap<us
     log::debug!(
         "Elevation: part {part:p} {}: floor {before} -> {next}, floor_type {:#x} -> {:#x}",
         oid(part),
-        original[&part.addr()],
+        floor_type_before,
         (*part).floor_type
     );
 
@@ -315,10 +314,9 @@ unsafe fn adjust(delta: i32, config: &ElevationConfig, original: &mut HashMap<us
 
 /// Puts the held part back under the game's solver: auto bit on, floors reset to 0 so the game
 /// recomputes them the next time the ship is edited (drop the part to trigger that).
-unsafe fn restore(original: &mut HashMap<usize, u64>) {
+unsafe fn restore() {
     let Some(part) = held_part() else { return };
 
-    original.remove(&part.addr());
     // The "force floor 3" bit would pin the part again.
     (*part).floor_type = ((*part).floor_type | 0x1) & !0x10;
     let before = (*part).floor;
@@ -340,14 +338,12 @@ unsafe fn key_down(code: u16) -> bool {
     GetAsyncKeyState(code as i32) as u16 & 0x8000 != 0
 }
 
-/// Remembers which keys were down on the previous poll so that only a new press counts, and the
-/// `m_floor_type` of the parts that were changed.
+/// Remembers which keys were down on the previous poll so that only a new press counts.
 #[derive(Default)]
 struct KeyState {
     raise_was: bool,
     lower_was: bool,
     auto_was: bool,
-    original: HashMap<usize, u64>,
 }
 
 /// True when the game's window has the keyboard focus. `GetAsyncKeyState` sees keys typed into
@@ -367,13 +363,13 @@ unsafe fn poll_keys(settings: &Settings, state: &mut KeyState) {
     let auto = focused && key_down(config.keys.auto.code());
 
     if lower && !state.lower_was {
-        adjust(-1, config, &mut state.original);
+        adjust(-1, config);
     }
     if raise && !state.raise_was {
-        adjust(1, config, &mut state.original);
+        adjust(1, config);
     }
     if auto && !state.auto_was {
-        restore(&mut state.original);
+        restore();
     }
     state.raise_was = raise;
     state.lower_was = lower;
