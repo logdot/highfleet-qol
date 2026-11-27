@@ -224,7 +224,7 @@ unsafe extern "C" fn init() -> bool {
     }
 
     #[cfg(not(feature = "1_151"))]
-    if config.elevation.enabled && GAME_IS_STEAM_1_163.load(Ordering::Relaxed) {
+    if config.elevation.enabled {
         elevation::start();
     }
 

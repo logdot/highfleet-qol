@@ -11,9 +11,8 @@
 //!   by a trampoline: original call, then [`native_tick`]. That runs on the game thread once per
 //!   editor frame, so it polls the keys, writes to the held part and draws the readout with the
 //!   game's own font code. No extra threads and no extra window.
-//! * **window** (and the fallback when the hook site does not look right): the original design of
-//!   the standalone `highfleet-elevation` mod. A worker thread polls the keys and an overlay
-//!   thread draws the readout in a transparent window above the game.
+//! * **window**: a worker thread polls the keys and an overlay thread draws the readout in a
+//!   transparent window above the game.
 //!
 //! With `hint: off` the native hook still handles the keys but draws nothing.
 //!
@@ -39,7 +38,7 @@ use std::{
     time::Duration,
 };
 
-use patchy::{PatchSession, ReturnType, Trampoline};
+use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, StackAlignment, Trampoline};
 
 use windows_sys::Win32::{
     Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -72,7 +71,6 @@ use windows_sys::Win32::{
 
 use crate::config::{ElevationConfig, ElevationHint, ResolvedKeys};
 
-const IMAGE_BASE: usize = 0x1_4000_0000;
 const HELD_PART: usize = 0x1_403c_0d88;
 const EDITOR_ACTIVE: usize = 0x1_403e_f368;
 
@@ -95,7 +93,7 @@ const COLOR_KEY: COLORREF = 0x00ff_00ff;
 /// The `call 0x1400d4380` (editor label pass) that is wrapped, as `E8 rel32`.
 const HOOK_SITE: usize = 0x1_4030_3fb4;
 const HOOK_TARGET: usize = 0x1_400d_4380;
-const HOOK_BYTES: [u8; 5] = [0xe8, 0xc7, 0x03, 0xdd, 0xff];
+const HOOK_SIZE: usize = 5;
 
 /// The global `hgeResourceManager*` (`Media.res`).
 const MEDIA_RES: usize = 0x1_43a1_19e8;
@@ -145,7 +143,6 @@ struct Settings {
     keys: ResolvedKeys,
     /// First lines of the readout: the title and the keys.
     header: String,
-    /// How the readout is shown after checking that the native hook site is usable.
     hint: ElevationHint,
 }
 
@@ -154,39 +151,31 @@ static SETTINGS: OnceLock<Settings> = OnceLock::new();
 static NATIVE_STATE: OnceLock<Mutex<KeyState>> = OnceLock::new();
 static STATUS: Mutex<String> = Mutex::new(String::new());
 
-/// Prepares manual elevation: checks the game image, reads the settings and, unless the hint is
-/// set to `window`, prepares the native hook. Nothing is started yet; see [`start`].
+/// Reads the settings and prepares the editor hook unless `window` mode was selected.
+/// The window and worker threads are started separately; see [`start`].
 pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> patchy::Result {
-    if GetModuleHandleA(std::ptr::null()) as usize != IMAGE_BASE {
-        log::error!("Elevation: unexpected image base, not enabling");
-        return Ok(());
-    }
-
     let keys = config.keys.resolve();
     let header = format!(
         "ELEVATION  {} up  {} down  {} auto\n",
         keys.raise_label, keys.lower_label, keys.auto_label
     );
 
-    let mut hint = config.hint;
-    if hint != ElevationHint::Window {
-        // If another mod (or the debug draw test) already changed this call, a failed patch would
-        // stop every QoL feature from installing, so look first and fall back to the window.
-        let site = std::slice::from_raw_parts(HOOK_SITE as *const u8, HOOK_BYTES.len());
-        if site != HOOK_BYTES {
-            log::error!(
-                "Elevation: the editor label call at {HOOK_SITE:#x} is not what was expected, using the overlay window instead"
-            );
-            hint = ElevationHint::Window;
-        }
-    }
-
-    if hint != ElevationHint::Window {
-        let mut trampoline = Trampoline::new();
-        trampoline.absolute_call(HOOK_TARGET as *const ());
-        trampoline.preserved_call(native_tick as *const (), &[], &[], ReturnType::None);
-        trampoline.relative_jump(HOOK_SITE + HOOK_BYTES.len());
-        session.detour_trampoline(HOOK_SITE, HOOK_BYTES.len(), trampoline)?;
+    if config.hint != ElevationHint::Window {
+        session.detour_trampoline(HOOK_SITE, HOOK_SIZE, |_| {
+            let mut trampoline = Trampoline::new();
+            // The original call site provides aligned RSP and shadow space.
+            trampoline.absolute_call(HOOK_TARGET as *const ());
+            trampoline.call(CallBridge {
+                callback: native_tick as *const (),
+                incoming_stack: StackAlignment::Aligned16,
+                flags: FlagPolicy::Preserve,
+                keep_return: KeepReturn::Neither,
+                before_call: &[],
+                after_call: &[],
+            });
+            trampoline.relative_jump(HOOK_SITE + HOOK_SIZE);
+            Ok(trampoline)
+        })?;
         let _ = NATIVE_STATE.set(Mutex::new(KeyState::default()));
     }
 
@@ -196,7 +185,7 @@ pub unsafe fn prepare(session: &mut PatchSession, config: &ElevationConfig) -> p
         child_offset: config.child_offset,
         keys,
         header,
-        hint,
+        hint: config.hint,
     };
     log::info!(
         "Elevation prepared: {} raise, {} lower, {} auto (max floor {}, sync children {}, child offset {}, hint {:?})",

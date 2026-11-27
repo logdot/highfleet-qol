@@ -137,7 +137,7 @@ Lets you raise and lower the elevation (floor) of the part you hold in the ship 
 * `sync_children`: mounted modules (guns and similar) follow the part. `child_offset` is their floor relative to the mount (`0` same floor, `1` one above).
 * `hint`: where the readout is shown.
   * `"native"` (default): drawn inside the game, on the right side of the ship editor, in the game's own `fixed_16` font, white.
-  * `"window"`: a separate see-through window placed above the game window (the older behaviour). The mod switches to this by itself if the native text cannot be drawn, for example when another mod already changes the same editor drawing call (a line in the log says so). You can also choose it by hand.
+  * `"window"`: a separate see-through window placed above the game window.
   * `"off"`: no readout at all; the keys still work.
 * Keys are a single letter or digit, `F1` to `F12`, or a name: `Backslash`, `Tab`, `Space`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Semicolon`, `Quote`, `Backquote`, `LeftBracket`, `RightBracket`. Write `Backslash` rather than `"\\"`. An unknown name is reported in the log and that key keeps its default.
 
