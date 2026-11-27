@@ -102,6 +102,19 @@ pub struct Config {
     /// Multiple rules are useful when it should have different chances or quantities in different city types.
     #[serde(default, deserialize_with = "deserialize_shop_parts")]
     pub shop_parts: HashMap<String, Vec<ShopPart>>,
+    /// Enables custom part menus: shop bars that open their own list of parts.
+    ///
+    /// Disabled by default.
+    #[serde(default)]
+    pub enable_part_menus: bool,
+    /// Part menus to add to city shops and the shipworks.
+    ///
+    /// Each entry is a bar (an `m_oid` with stats) plus the parts it offers.
+    /// A menu with a vanilla bar oid (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`,
+    /// `ITEM_AMMO` or `ITEM_LEG`) adds its parts to that existing menu; every
+    /// other bar oid becomes a new part menu with its own stock.
+    #[serde(default)]
+    pub part_menus: Vec<PartMenuConfig>,
     /// Multiplies the money received when selling ship parts.
     ///
     /// `1.0` gives the normal amount, `2.0` doubles it, and `0.5` halves it.
@@ -193,6 +206,138 @@ where
     Ok(raw.into_iter().map(|(k, v)| (k, v.into_vec())).collect())
 }
 
+/// One custom part menu: a shop bar (and optional shipworks button) plus the parts it offers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartMenuConfig {
+    /// `m_oid` of the shop bar / constructor button.
+    ///
+    /// For a new menu, the oid must exist in `parts.seria` and have a record in
+    /// `OL.seria` (that record supplies the icon and name). For a vanilla bar oid
+    /// (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`, `ITEM_AMMO`, `ITEM_LEG`) the parts
+    /// are added to that existing menu instead and no new bar is created.
+    pub bar: String,
+    /// Parts offered by the menu, in order.
+    ///
+    /// A bare string uses the part's native resource count for a vanilla bar
+    /// (so a 2x1 armor plate still costs two units) and one unit otherwise. The
+    /// object form accepts an explicit `cost`:
+    ///
+    /// ```json
+    /// "parts": ["MDL_QUARTERS_01", { "oid": "MDL_GENERATOR_01", "cost": 2 }]
+    /// ```
+    #[serde(default)]
+    pub parts: Vec<PartMenuPart>,
+    /// Which resource the menu spends.
+    ///
+    /// Omitted means "auto": a vanilla bar uses its own resource, any other bar
+    /// gets a new custom resource. `"none"` disables resource gating (the parts
+    /// cost money only), `"custom"` forces a new custom resource, and `"hull"`,
+    /// `"armor"`, `"fuel"`, `"ammo"`, `"leg"` or the matching numeric id
+    /// (`10`, `20`, `30`, `40`, `50`) select a vanilla resource; the bar oid must
+    /// then be the matching `ITEM_*` bar.
+    #[serde(default)]
+    pub resource: Option<PartMenuResource>,
+    /// Spawn rules, one object or an array of objects.
+    ///
+    /// The first rule whose `city_types` matches the current city is used; an
+    /// empty list matches every city type. For a new bar the rule's
+    /// `min_parts`/`max_parts` are the bar's starting stock, and `probability`
+    /// decides whether the bar appears at all. For a vanilla bar the stock comes
+    /// from the game, so only `probability` and `city_types` are used.
+    #[serde(default, deserialize_with = "deserialize_part_menu_rules")]
+    pub rules: Vec<PartMenuRule>,
+}
+
+/// One part inside a [`PartMenuConfig`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PartMenuPart {
+    /// A part id; uses the part's native resource count for a vanilla bar, or
+    /// one unit for a custom resource.
+    Name(String),
+    /// A part id with an explicit resource cost.
+    Detailed {
+        /// Part id (`m_oid` in `parts.seria`).
+        oid: String,
+        /// Resource units one copy costs. Defaults to `1`.
+        #[serde(default = "default_menu_cost")]
+        cost: u32,
+    },
+}
+
+impl PartMenuPart {
+    /// Returns the part id and its explicit resource cost, if one was given.
+    #[must_use]
+    pub fn oid_and_cost(&self) -> (&str, Option<u32>) {
+        match self {
+            Self::Name(oid) => (oid, None),
+            Self::Detailed { oid, cost } => (oid, Some((*cost).max(1))),
+        }
+    }
+}
+
+/// The resource a [`PartMenuConfig`] spends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PartMenuResource {
+    /// `"custom"`, `"none"` or a vanilla resource name (`"hull"`, `"armor"`, ...).
+    Name(String),
+    /// A resource id: `10` hull, `20` armor, `30` fuel, `40` ammo, `50` leg,
+    /// or an unused id between `61` and `98` for a custom resource.
+    Id(u32),
+}
+
+/// One spawn rule for a [`PartMenuConfig`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartMenuRule {
+    /// Chance that the menu appears in a matching city.
+    ///
+    /// `1.0` always appears, `0.25` is a 25% chance. Defaults to `1.0`.
+    #[serde(default = "default_menu_probability")]
+    pub probability: f32,
+    /// Smallest stock the new bar can start with. Defaults to `1`.
+    #[serde(default = "default_menu_count")]
+    pub min_parts: u32,
+    /// Largest stock the new bar can start with. Defaults to `1`.
+    #[serde(default = "default_menu_count")]
+    pub max_parts: u32,
+    /// City type numbers where this rule applies; empty means every city type.
+    #[serde(default)]
+    pub city_types: Vec<u32>,
+}
+
+/// Accepts one [`PartMenuRule`] or an array of them.
+fn deserialize_part_menu_rules<'de, D>(deserializer: D) -> Result<Vec<PartMenuRule>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Many(Vec<PartMenuRule>),
+        One(PartMenuRule),
+    }
+
+    let raw: Option<OneOrMany> = Option::deserialize(deserializer)?;
+    Ok(match raw {
+        None => Vec::new(),
+        Some(OneOrMany::Many(rules)) => rules,
+        Some(OneOrMany::One(rule)) => vec![rule],
+    })
+}
+
+fn default_menu_probability() -> f32 {
+    1.0
+}
+
+fn default_menu_count() -> u32 {
+    1
+}
+
+fn default_menu_cost() -> u32 {
+    1
+}
+
 impl Default for Config {
     fn default() -> Self {
         let plane_config = plane_runtime::get_planes();
@@ -214,6 +359,8 @@ impl Default for Config {
             planes: plane_config,
             enable_shop_parts: false,
             shop_parts: HashMap::new(),
+            enable_part_menus: false,
+            part_menus: Vec::new(),
             sell_multiplier: 1.0,
             refuel: RefuelConfig::default(),
             speed: SpeedConfig::default(),
@@ -293,5 +440,77 @@ mod tests {
         assert_eq!(config.refuel.ai_rate_multiplier, 1.0);
         assert_eq!(config.speed.preset, SpeedPreset::Custom);
         assert_eq!(config.speed.exponent, 0.75);
+    }
+
+    #[test]
+    fn part_menus_accept_names_costs_and_single_or_multiple_rules() {
+        let json = OLD_CONFIG.replacen(
+            "\"planes\"",
+            r#""enable_part_menus": true,
+        "part_menus": [
+            {
+                "bar": "ITEM_PAPERS",
+                "parts": ["MDL_QUARTERS_01", { "oid": "MDL_GENERATOR_01", "cost": 2 }],
+                "resource": "custom",
+                "rules": { "probability": 0.5, "min_parts": 4, "max_parts": 12, "city_types": [3] }
+            },
+            {
+                "bar": "ITEM_ARMOR",
+                "parts": ["MDL_ARMOR1X1_01"],
+                "rules": [
+                    { "probability": 1.0 },
+                    { "probability": 0.25, "city_types": [7] }
+                ]
+            }
+        ],
+        "planes""#,
+            1,
+        );
+        let config: Config = serde_json::from_str(&json).unwrap();
+
+        assert!(config.enable_part_menus);
+        assert_eq!(config.part_menus.len(), 2);
+
+        let papers = &config.part_menus[0];
+        assert_eq!(papers.bar, "ITEM_PAPERS");
+        assert_eq!(papers.parts.len(), 2);
+        assert_eq!(papers.parts[0].oid_and_cost(), ("MDL_QUARTERS_01", None));
+        assert_eq!(
+            papers.parts[1].oid_and_cost(),
+            ("MDL_GENERATOR_01", Some(2))
+        );
+        assert_eq!(papers.rules.len(), 1);
+        assert_eq!(papers.rules[0].min_parts, 4);
+        assert_eq!(papers.rules[0].max_parts, 12);
+
+        let armor = &config.part_menus[1];
+        assert!(armor.resource.is_none());
+        assert_eq!(armor.rules.len(), 2);
+        assert_eq!(armor.rules[1].probability, 0.25);
+        assert_eq!(armor.rules[1].city_types, vec![7]);
+    }
+
+    #[test]
+    fn part_menu_resource_accepts_a_name_or_an_id() {
+        let json = OLD_CONFIG.replacen(
+            "\"planes\"",
+            r#""part_menus": [
+            { "bar": "ITEM_HULL", "parts": [], "resource": "none" },
+            { "bar": "ITEM_AMMO", "parts": [], "resource": 40 }
+        ],
+        "planes""#,
+            1,
+        );
+        let config: Config = serde_json::from_str(&json).unwrap();
+
+        assert!(matches!(
+            config.part_menus[0].resource,
+            Some(PartMenuResource::Name(ref name)) if name == "none"
+        ));
+        assert!(matches!(
+            config.part_menus[1].resource,
+            Some(PartMenuResource::Id(40))
+        ));
+        assert!(config.part_menus[0].rules.is_empty());
     }
 }
