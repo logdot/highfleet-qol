@@ -111,8 +111,8 @@ pub struct Config {
     #[serde(default)]
     pub speed: SpeedConfig,
     /// Chooses the firing-arc rules on Steam 1.163.
-    /// `classic` restores the 1.151 floor rules for free-standing parts and engines.
-    /// `classic_kaz` adds the 1.151 KAZ intercept cone.
+    /// `classic` restores the 1.151 rules.
+    /// These cover free-standing parts, engines and the KAZ intercept cone.
     /// `modern` uses the 1.163 rules, which make those checks stricter.
     /// `vanilla` uses the game's own rules and is the default.
     #[serde(default)]

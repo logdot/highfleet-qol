@@ -1,6 +1,6 @@
 //! Ports the Steam 1.151 part-floor rules and KAZ intercept cone to Steam 1.163.
 //!
-//! `classic` patches the two 1.151 floor differences:
+//! `classic` patches two 1.151 floor differences and the 1.151 KAZ intercept cone:
 //!
 //! 1. `World_RaycastBodies` (`0x140239f30`) adds one to the height level of some candidate bodies.
 //!    These are bodies whose master is missing or of type 7 (free-standing parts: swivel guns, engines, legs).
@@ -10,9 +10,8 @@
 //!    It does so when something next to the part is higher, but tests only the gun category bit `0x20`.
 //!    Steam 1.151 also accepted the engine bit `0x100`.
 //!    The `GetPartFlagsWord` call in that test is detoured so the engine bit produces the same result.
-//!
-//! `classic_kaz` also widens the KAZ intercept half-angle from the 1.163 pi/4 to the 1.151 1.2 rad.
-//! It points the two `movss` loads in `Weapon_FlakInterceptScan` at an existing 1.2f.
+//! 3. The KAZ intercept half-angle is pi/4 in 1.163 and 1.2 rad in 1.151.
+//!    The two `movss` loads in `Weapon_FlakInterceptScan` are pointed at an existing 1.2f.
 //!
 //! The KAZ covered cone, threshold and sector ray start are `OL.seria` data and are not patched.
 //! They are `m_mdl_sectors_type`, `m_mdl_sectors_threshold` and `m_mdl_sectors_shift`.
@@ -47,21 +46,14 @@ fn movss_xmm1(at: usize, target: usize) -> [u8; 8] {
 /// Prepares the selected patches.
 /// Does nothing for `vanilla` and `modern`.
 pub unsafe fn patch_elevation_rules(session: &mut PatchSession, rules: ElevationRules) -> Result {
-    let floors = rules.has_classic_floors();
-    let cone = rules.forces_classic_kaz_cone();
-    if !floors && !cone {
+    if !rules.is_classic() {
         log::info!("Elevation rules are the game's own, leaving them alone");
         return Ok(());
     }
 
-    if floors {
-        patch_floors(session)?;
-        patch_engine_elevation(session)?;
-    }
-    if cone {
-        patch_kaz_cone(session)?;
-    }
-    Ok(())
+    patch_floors(session)?;
+    patch_engine_elevation(session)?;
+    patch_kaz_cone(session)
 }
 
 unsafe fn patch_floors(session: &mut PatchSession) -> Result {
