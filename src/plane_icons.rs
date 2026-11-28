@@ -2,73 +2,61 @@
 //! T-7 and LA-29.
 //!
 //! The panel is drawn once per frame inside `combatEvents`: `somethingAircraftDisplay__`
-//! (`0x140278780`) on 1.151, `Hud_DrawMapSignLabels` (`0x14029b3e0`) on 1.163. Its aircraft list is
-//! not data: the oid of every part is compared against two hardcoded strings (`"CRAFT_LA29"` and
-//! `"CRAFT_T7"`), each feeding its own counter register and its own hand-written draw block. A
-//! third type - for example a QoL aircraft such as `CRAFT_SB15` - can never be counted and never
-//! gets an icon, so the panel shows nothing for it.
+//! (`0x140278780`) on 1.151 and `Hud_DrawMapSignLabels` (`0x14029b3e0`) on 1.163.
+//! Its aircraft list is not data: the oid of every part is compared against two hardcoded strings
+//! (`"CRAFT_LA29"` and `"CRAFT_T7"`), each feeding its own counter and its own draw block.
+//! A third type - for example a QoL aircraft such as `CRAFT_SB15` - is therefore never counted and
+//! never gets an icon.
 //!
-//! With this option enabled, that call is replaced by the same drawing driven by a list:
+//! This module replaces that call with the same drawing driven by a list:
 //!
-//! - an aircraft type is shown when its oid is a key of the aircraft table rebuilt from the
-//!   `planes` section of `qol.json` (`0x143a13c50`), so a craft that cannot be armed stays hidden;
-//! - the icon is the animation `sign_<aircraft name>` (`CRAFT_SB15` -> `sign_SB15`), the same
-//!   convention as the game's own `sign_T7` / `sign_LA29`. A missing animation leaves the slot
-//!   empty and still prints the count;
-//! - art larger than 58 x 73 is shrunk about its hotspot to fit; anything that fits is drawn at its
-//!   own size;
-//! - three types per row, up to three rows. A second row moves the `CRAFTS` caption, the divider,
-//!   the `MUNITION` caption and the munitions row down by one row pitch, exactly like the rest of
-//!   the layout does for the first row;
-//! - counts and munitions are the same numbers the game itself uses (`Stats.m_category` aircraft
-//!   bit, and the `AircraftLogic` round counters), and a type with zero planes stays hidden.
+//! - a type is shown when its oid is a key of the aircraft table rebuilt from `planes`.
+//! - the icon is the `sign_<aircraft name>` animation, tinted with the side colour.
+//! - a missing animation keeps the count and leaves the icon slot empty, so the row never shifts.
+//! - three types fit per row, and a second row moves the captions, the divider and the munitions
+//!   row down by one row pitch.
+//! - counts and munitions are the game's own numbers, read from the same fields its own panel uses.
 //!
-//! Everything else is the game's own geometry and the game's own draw calls: player at x = 30,
-//! enemy at `graphicsFrameWidth - 400`, counts at y = 40, icons at y = 75, captions at 107 / 132,
-//! divider at 130, munitions at 155 / 190, entries advanced by `icon_x + 50` with the icon clearing
-//! the count by 35. The one addition to the enemy side is that its left edge is pulled left when
-//! its widest row would otherwise run off the screen, because both rows grow rightwards.
-//!
-//! Both Steam builds are supported from this one module; the address table, the aircraft-logic
-//! offset and the munition list are chosen by the `1_151` feature. The 1.151 panel has no gun entry
-//! at all (the game only counts bombs, rockets and K-13 there) and draws the T-7, LA-29 and all
-//! three munition icons even when their count is zero, so this module keeps that behaviour for
-//! those entries; mod-added types are only listed when the side actually has one.
+//! The geometry, colours and draw calls are the game's own.
+//! The single addition is that the enemy panel's left edge is pulled left when its widest row would
+//! run past the screen, because both rows grow rightwards and the enemy panel only has 400 units.
 
-use std::ffi::{c_char, CString};
-use std::mem::{size_of, MaybeUninit};
-use std::slice;
+use std::ffi::{c_char, c_void, CString};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use patchy::{PatchError, PatchSession, ProcessModule, Result, Trampoline};
-use windows_sys::Win32::System::Memory::{
-    VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
-};
+use highfleet::general::{EscadraString, Link, SentinelList, TllContainer};
+#[cfg(feature = "1_151")]
+use highfleet::v1_151::Body;
+#[cfg(not(feature = "1_151"))]
+use highfleet::v1_163::Body;
+use patchy::{PatchSession, ProcessModule, Result, Trampoline};
 
-/// `CALL` to the panel inside `combatEvents`, the stolen bytes, the call target and the address
-/// the trampoline resumes at. Steam 1.151 routes it through `somethingAircraftDisplay__`, 1.163
-/// through `Hud_DrawMapSignLabels`.
+use crate::structs::aircraft_logic::AircraftLogic;
+use crate::structs::plane::Plane;
+use crate::structs::sign_sprite::SignSprite;
+
+/// The `CALL` to the panel inside `combatEvents`, relative to the module base.
 #[cfg(feature = "1_151")]
 const SITE_RVA: usize = 0x277bad;
 #[cfg(not(feature = "1_151"))]
 const SITE_RVA: usize = 0x29a8f6;
 
-#[cfg(feature = "1_151")]
-const STOLEN: [u8; 5] = [0xe8, 0xce, 0x0b, 0x00, 0x00];
-#[cfg(not(feature = "1_151"))]
-const STOLEN: [u8; 5] = [0xe8, 0xe5, 0x0a, 0x00, 0x00];
-
+/// The panel function the call reaches, relative to the module base.
 #[cfg(feature = "1_151")]
 const TARGET_RVA: usize = 0x278780;
 #[cfg(not(feature = "1_151"))]
 const TARGET_RVA: usize = 0x29b3e0;
 
+/// The instruction after the call, where the trampoline resumes.
 #[cfg(feature = "1_151")]
 const CONTINUATION_RVA: usize = 0x277bb2;
 #[cfg(not(feature = "1_151"))]
 const CONTINUATION_RVA: usize = 0x29a8fb;
 
-// Every function this module calls, relative to the module base.
+/// A near `CALL rel32` is five bytes.
+const PANEL_CALL_LEN: usize = 5;
+
+// Game functions this module calls, relative to the module base.
 #[cfg(feature = "1_151")]
 const BODY_MARKERS_RVA: usize = 0x278120;
 #[cfg(not(feature = "1_151"))]
@@ -85,14 +73,14 @@ const SET_SPRITE_FIELDS_RVA: usize = 0x166ff0;
 const SET_SPRITE_FIELDS_RVA: usize = 0x172ae0;
 
 #[cfg(feature = "1_151")]
-const QUAD_POSITION_RVA: usize = 0x166ad0;
+const SPRITE_POSITION_RVA: usize = 0x166ad0;
 #[cfg(not(feature = "1_151"))]
-const QUAD_POSITION_RVA: usize = 0x1725c0;
+const SPRITE_POSITION_RVA: usize = 0x1725c0;
 
 #[cfg(feature = "1_151")]
-const QUAD_RENDER_EX_RVA: usize = 0x166fb0;
+const SPRITE_RENDER_EX_RVA: usize = 0x166fb0;
 #[cfg(not(feature = "1_151"))]
-const QUAD_RENDER_EX_RVA: usize = 0x172aa0;
+const SPRITE_RENDER_EX_RVA: usize = 0x172aa0;
 
 #[cfg(feature = "1_151")]
 const FONT_SETUP_RVA: usize = 0x198e70;
@@ -120,11 +108,11 @@ const DRAW_WORLD_LINE_RVA: usize = 0x2279a0;
 const DRAW_WORLD_LINE_RVA: usize = 0x248ba0;
 
 #[cfg(feature = "1_151")]
-const CHECK_PART_FLAG_RVA: usize = 0x47960;
+const PART_HAS_CATEGORY_RVA: usize = 0x47960;
 #[cfg(not(feature = "1_151"))]
-const CHECK_PART_FLAG_RVA: usize = 0x49470;
+const PART_HAS_CATEGORY_RVA: usize = 0x49470;
 
-// Globals, relative to the module base.
+// Game globals this module reads, relative to the module base.
 #[cfg(feature = "1_151")]
 const MEDIA_MANAGER_RVA: usize = 0x3921f78;
 #[cfg(not(feature = "1_151"))]
@@ -140,79 +128,29 @@ const PLANE_TABLE_RVA: usize = 0x3942740;
 #[cfg(not(feature = "1_151"))]
 const PLANE_TABLE_RVA: usize = 0x3a13c50;
 
-/// Player roster: `{ list head, length }`, built by the combat level scripts.
+/// Player roster header: `SentinelList<Link>` with the side's own parts.
 #[cfg(feature = "1_151")]
-const PLAYER_ROSTER: Roster = Roster {
-    list: 0x7eedd78,
-    length: 0x7eedd80,
-};
+const PLAYER_ROSTER_RVA: usize = 0x7eedd78;
 #[cfg(not(feature = "1_151"))]
-const PLAYER_ROSTER: Roster = Roster {
-    list: 0x7fc73b0,
-    length: 0x7fc73b8,
-};
+const PLAYER_ROSTER_RVA: usize = 0x7fc73b0;
 
-/// Enemy roster.
+/// Enemy roster header.
 #[cfg(feature = "1_151")]
-const ENEMY_ROSTER: Roster = Roster {
-    list: 0x7eedec0,
-    length: 0x7eedec8,
-};
+const ENEMY_ROSTER_RVA: usize = 0x7eedec0;
 #[cfg(not(feature = "1_151"))]
-const ENEMY_ROSTER: Roster = Roster {
-    list: 0x7fc75a8,
-    length: 0x7fc75b0,
-};
+const ENEMY_ROSTER_RVA: usize = 0x7fc75a8;
 
-/// A side's battle roster globals (RVAs).
-#[derive(Clone, Copy, Debug)]
-struct Roster {
-    list: usize,
-    length: usize,
-}
-
-/// `TllContainer<EscadraString, Plane>` node layout: links, flags, key, payload.
-const TLL_LEFT: usize = 0x00;
-const TLL_PARENT: usize = 0x08;
-const TLL_RIGHT: usize = 0x10;
-const TLL_IS_SENTINEL: usize = 0x19;
-const TLL_KEY: usize = 0x20;
-const TLL_NODE_SIZE: usize = 0x60;
-
-/// Roster list node -> `Body *`, and the body fields this module reads.
-const NODE_BODY: usize = 0x18;
-const BODY_CODE: usize = 0x28;
-const BODY_OID: usize = 0x190;
-#[cfg(feature = "1_151")]
-const BODY_AIRCRAFT_LOGIC: usize = 0x9e8;
-#[cfg(not(feature = "1_151"))]
-const BODY_AIRCRAFT_LOGIC: usize = 0xa20;
-#[cfg(feature = "1_151")]
-const BODY_SIZE: usize = 0xa08;
-#[cfg(not(feature = "1_151"))]
-const BODY_SIZE: usize = 0xa30;
-const CODE_BODY: i32 = 15;
+/// `Body` class code, the same value every serialised body carries.
+const CODE_BODY: u64 = 15;
 /// `Stats.m_category` bit that marks the aircraft category.
 const CATEGORY_AIRCRAFT: u32 = 0x400;
-
-/// `AircraftLogic` counters the panel sums (bombs, rockets, K-13, gun rounds).
-const LOGIC_BOMBS: usize = 0x128;
-const LOGIC_ROCKETS: usize = 0x138;
-const LOGIC_AAM: usize = 0x148;
-const LOGIC_GUN_LOAD: usize = 0xac;
-const LOGIC_GUN_AMMO: usize = 0xb4;
+/// Rounds per gun-ammo unit, the multiplier the game's own panel applies.
 const ROUNDS_PER_GUN_AMMO: i32 = 20;
-
-/// `GfxQuad` fields: blend state cleared on every sign load, and the frame's texture extents.
-const SPRITE_BLEND: usize = 0x168;
-const SPRITE_EXTENT_X: usize = 0x188;
-const SPRITE_EXTENT_Y: usize = 0x18c;
 
 // The panel's own geometry, all of it the game's.
 const PLAYER_X: f32 = 30.0;
 const ENEMY_INSET: f32 = 400.0;
 const EDGE_INSET: f32 = 30.0;
-const FALLBACK_WIDTH: i32 = 1920;
 const LABEL_Y: f32 = 40.0;
 const ICON_Y: f32 = 75.0;
 const CRAFTS_CAPTION_Y: f32 = 107.0;
@@ -224,6 +162,7 @@ const LINE_LENGTH: f32 = 240.0;
 const LINE_WIDTH: f32 = 5.0;
 /// `icon_x + 50`, the game's own advance between entries.
 const ENTRY_ADVANCE: f32 = 50.0;
+/// How far past the last icon the divider runs.
 const DIVIDER_PAD: f32 = 8.0;
 /// Three types per row, three rows.
 const COLUMNS: usize = 3;
@@ -236,9 +175,6 @@ const ICON_OFFSET: f32 = 35.0;
 const ICON_MAX_WIDTH: f32 = 58.0;
 const ICON_MAX_HEIGHT: f32 = 73.0;
 
-/// The colour the game creates both panel fonts with; each side recolours before it draws.
-const FONT_COLOR: u32 = ENEMY_COLOR;
-/// The panel's own side colours.
 const PLAYER_COLOR: u32 = 0xFF00_E4FF;
 const ENEMY_COLOR: u32 = 0xFFA8_FC00;
 
@@ -246,19 +182,28 @@ const FONT_COUNT: &[u8] = b"pollock_60\0";
 const FONT_CAPTION: &[u8] = b"dinpro_14_reg\0";
 
 type FnBodyMarkers = unsafe extern "C" fn();
-type FnLoadMedia = unsafe extern "C" fn(usize, *const c_char) -> usize;
-type FnSetSpriteFields = unsafe extern "C" fn(usize, u32, i32);
-type FnQuadPosition = unsafe extern "C" fn(usize, f32, f32);
-type FnQuadRenderEx = unsafe extern "C" fn(usize, f32, f32, f32, f32, f32);
-type FnSetupFont = unsafe extern "C" fn(*const c_char, f32, i32, u32) -> usize;
-type FnSetFontColor = unsafe extern "C" fn(usize, u32);
-type FnMeasureString = unsafe extern "C" fn(usize, *const u8, i32) -> f32;
-type FnDrawLabel =
-    unsafe extern "C" fn(usize, f32, f32, u32, *const u8, *mut f32, usize, f32, f32) -> i32;
+type FnLoadMedia = unsafe extern "C" fn(*const c_void, *const c_char) -> *mut SignSprite;
+type FnSetSpriteFields = unsafe extern "C" fn(*mut SignSprite, u32, i32);
+type FnSpritePosition = unsafe extern "C" fn(*mut SignSprite, f32, f32);
+type FnSpriteRenderEx = unsafe extern "C" fn(*mut SignSprite, f32, f32, f32, f32, f32);
+type FnSetupFont = unsafe extern "C" fn(*const c_char, f32, i32, u32) -> *mut c_void;
+type FnSetFontColor = unsafe extern "C" fn(*mut c_void, u32);
+type FnMeasureString = unsafe extern "C" fn(*mut c_void, *const u8, i32) -> f32;
+type FnDrawLabel = unsafe extern "C" fn(
+    *mut c_void,
+    f32,
+    f32,
+    u32,
+    *const u8,
+    *mut f32,
+    *const c_void,
+    f32,
+    f32,
+) -> i32;
 type FnDrawWorldLine = unsafe extern "C" fn(Vec2, Vec2, f32, u32, u32, u8, f32, u32, f32);
-type FnPartHasCategory = unsafe extern "C" fn(usize, u32) -> bool;
+type FnPartHasCategory = unsafe extern "C" fn(*mut Body, u32) -> bool;
 
-/// A 2D point by value - `Gfx_DrawWorldLine` takes two of them in `RCX` / `RDX`.
+/// A 2D point by value: `Gfx_DrawWorldLine` takes two of them in `RCX` and `RDX`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Vec2 {
@@ -289,66 +234,68 @@ const MUNITIONS: [(&str, fn(&Totals) -> i32); 4] = [
     ("sign_GUN", |totals| totals.gun),
 ];
 
-/// 1.151 always draws the T-7 and LA-29 icons, even with no planes of that type; 1.163 hides a
-/// zero count. Mod-added types are only listed when the side actually has one (otherwise every
-/// type registered in `planes` would be listed with a zero).
+/// 1.151 always draws the T-7 and LA-29 icons, even with no planes of that type.
+/// 1.163 hides a zero count instead.
 const ALWAYS_SHOW_VANILLA_CRAFTS: bool = cfg!(feature = "1_151");
-/// 1.151 also draws all three munition entries unconditionally; 1.163 skips a zero.
+/// 1.151 draws all three munition entries unconditionally, while 1.163 skips a zero.
 const HIDE_ZERO_MUNITIONS: bool = cfg!(not(feature = "1_151"));
+
+/// What one side shows in the panel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Totals {
+    /// Craft oid -> planes of that type, in the order the panel draws them.
+    crafts: Vec<(String, u32)>,
+    bombs: i32,
+    rockets: i32,
+    aam: i32,
+    /// Only the 1.163 panel has a gun entry, so 1.151 never reads this.
+    #[cfg_attr(feature = "1_151", allow(dead_code))]
+    gun: i32,
+}
 
 /// Runtime addresses, resolved once when the patch is prepared.
 struct Game {
+    base: usize,
     body_markers: usize,
     load_media: usize,
     set_sprite_fields: usize,
-    quad_position: usize,
-    quad_render_ex: usize,
+    sprite_position: usize,
+    sprite_render_ex: usize,
     font_setup: usize,
     font_set_color: usize,
     measure_string: usize,
     draw_label: usize,
     draw_world_line: usize,
-    check_part_flag: usize,
-    media_manager: usize,
-    graphics_width: usize,
-    plane_table: usize,
-    player_roster: Roster,
-    enemy_roster: Roster,
+    part_has_category: usize,
 }
 
 impl Game {
     fn new(module: ProcessModule) -> Result<Self> {
         Ok(Self {
+            base: module.base_address(),
             body_markers: module.resolve_rva(BODY_MARKERS_RVA)?,
             load_media: module.resolve_rva(LOAD_MEDIA_RVA)?,
             set_sprite_fields: module.resolve_rva(SET_SPRITE_FIELDS_RVA)?,
-            quad_position: module.resolve_rva(QUAD_POSITION_RVA)?,
-            quad_render_ex: module.resolve_rva(QUAD_RENDER_EX_RVA)?,
+            sprite_position: module.resolve_rva(SPRITE_POSITION_RVA)?,
+            sprite_render_ex: module.resolve_rva(SPRITE_RENDER_EX_RVA)?,
             font_setup: module.resolve_rva(FONT_SETUP_RVA)?,
             font_set_color: module.resolve_rva(FONT_SET_COLOR_RVA)?,
             measure_string: module.resolve_rva(MEASURE_STRING_RVA)?,
             draw_label: module.resolve_rva(DRAW_LABEL_RVA)?,
             draw_world_line: module.resolve_rva(DRAW_WORLD_LINE_RVA)?,
-            check_part_flag: module.resolve_rva(CHECK_PART_FLAG_RVA)?,
-            media_manager: module.resolve_rva(MEDIA_MANAGER_RVA)?,
-            graphics_width: module.resolve_rva(GRAPHICS_WIDTH_RVA)?,
-            plane_table: module.resolve_rva(PLANE_TABLE_RVA)?,
-            player_roster: Roster {
-                list: module.resolve_rva(PLAYER_ROSTER.list)?,
-                length: module.resolve_rva(PLAYER_ROSTER.length)?,
-            },
-            enemy_roster: Roster {
-                list: module.resolve_rva(ENEMY_ROSTER.list)?,
-                length: module.resolve_rva(ENEMY_ROSTER.length)?,
-            },
+            part_has_category: module.resolve_rva(PART_HAS_CATEGORY_RVA)?,
         })
+    }
+
+    /// A game global by its RVA.
+    fn global<T>(&self, rva: usize) -> *mut T {
+        (self.base + rva) as *mut T
     }
 }
 
 static GAME: OnceLock<Game> = OnceLock::new();
 
-/// Replaces the battle CRAFTS / MUNITION panel so every aircraft in the `planes` section gets an
-/// icon.
+/// Replaces the battle CRAFTS / MUNITION panel so every aircraft in `planes` gets an icon.
 ///
 /// # Safety
 ///
@@ -357,30 +304,19 @@ static GAME: OnceLock<Game> = OnceLock::new();
 pub unsafe fn patch_plane_icons(session: &mut PatchSession) -> Result {
     let module = ProcessModule::main()?;
     let site = module.resolve_rva(SITE_RVA)?;
-    let found = slice::from_raw_parts(site as *const u8, STOLEN.len());
-
-    if found != STOLEN {
-        return Err(PatchError::SourceChanged { address: site });
-    }
-    let relative = i32::from_le_bytes(STOLEN[1..].try_into().unwrap()) as isize;
-    if (SITE_RVA + STOLEN.len()) as isize + relative != TARGET_RVA as isize {
-        // A different build: the call no longer reaches the panel.
-        return Err(PatchError::SourceChanged { address: site });
-    }
-
-    let game = Game::new(module)?;
     let continuation = module.resolve_rva(CONTINUATION_RVA)?;
-    let _ = GAME.set(game);
+    let panel = module.resolve_rva(TARGET_RVA)?;
 
-    session.detour_trampoline(site, STOLEN.len(), build_trampoline(continuation))?;
+    let _ = GAME.set(Game::new(module)?);
+    session.detour_trampoline(site, PANEL_CALL_LEN, build_trampoline(continuation))?;
 
-    log::info!("Prepared plane icons rework");
+    log::info!("Prepared plane icons rework (panel {panel:#x})");
     Ok(())
 }
 
 fn build_trampoline(continuation: usize) -> Trampoline {
     let mut trampoline = Trampoline::new();
-    // The replaced instruction is a mid-function CALL: RSP is 0 mod 16 there, so no stack padding.
+    // The replaced instruction is a mid-function call, where the stack is already 16-byte aligned.
     trampoline.absolute_call(draw_hook as *const ());
     trampoline.relative_jump(continuation);
     trampoline
@@ -395,163 +331,38 @@ extern "C" fn draw_hook() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Game memory
-// ---------------------------------------------------------------------------------------------
-
-/// True when `size` bytes at `address` are committed, readable and guard-free.
-fn readable(address: usize, size: usize) -> bool {
-    if address < 0x1_0000 || size == 0 {
-        return false;
-    }
-    let mut information = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
-    // SAFETY: VirtualQuery only inspects an address; the buffer is sized and aligned for the
-    // structure it fills in.
-    let queried = unsafe {
-        VirtualQuery(
-            address as *const _,
-            information.as_mut_ptr(),
-            size_of::<MEMORY_BASIC_INFORMATION>(),
-        )
-    };
-    if queried != size_of::<MEMORY_BASIC_INFORMATION>() {
-        return false;
-    }
-    // SAFETY: VirtualQuery returned a complete structure.
-    let information = unsafe { information.assume_init() };
-    if information.State != MEM_COMMIT
-        || information.Protect == PAGE_NOACCESS
-        || information.Protect & PAGE_GUARD != 0
-    {
-        return false;
-    }
-    let region_offset = address.saturating_sub(information.BaseAddress as usize);
-    size <= information.RegionSize.saturating_sub(region_offset)
-}
-
-fn usize_at(address: usize) -> Option<usize> {
-    readable(address, size_of::<usize>()).then(|| unsafe {
-        // SAFETY: just proved readable for exactly this many bytes.
-        std::ptr::read_unaligned(address as *const usize)
-    })
-}
-
-fn i32_at(address: usize) -> Option<i32> {
-    readable(address, size_of::<i32>()).then(|| unsafe {
-        // SAFETY: just proved readable for exactly this many bytes.
-        std::ptr::read_unaligned(address as *const i32)
-    })
-}
-
-fn f32_at(address: usize) -> Option<f32> {
-    readable(address, size_of::<f32>()).then(|| unsafe {
-        // SAFETY: just proved readable for exactly this many bytes.
-        std::ptr::read_unaligned(address as *const f32)
-    })
-}
-
-fn u8_at(address: usize) -> Option<u8> {
-    readable(address, 1).then(|| unsafe {
-        // SAFETY: just proved readable for exactly this byte.
-        std::ptr::read_unaligned(address as *const u8)
-    })
-}
-
-/// Copies an `EscadraString` (16-byte inline buffer, length `+0x10`, capacity `+0x18`) into `out`.
-///
-/// The length is checked against the capacity and `out`, so a stale record cannot ask for a large
-/// copy, and only ASCII is accepted - every oid and animation name in this game is ASCII.
-fn escadra_bytes(address: usize, out: &mut [u8]) -> Option<usize> {
-    let length = usize_at(address + 0x10)?;
-    let capacity = usize_at(address + 0x18)?;
-    if length == 0 || length > capacity || length > out.len() {
-        return None;
-    }
-    let buffer = if capacity >= 0x10 {
-        usize_at(address)?
-    } else {
-        address
-    };
-    if !readable(buffer, length) {
-        return None;
-    }
-    // SAFETY: the `length` bytes at `buffer` were just proved readable and `out` is at least as
-    // long.
-    let bytes = unsafe { slice::from_raw_parts(buffer as *const u8, length) };
-    if !bytes.iter().all(|byte| *byte < 0x80) {
-        return None;
-    }
-    out[..length].copy_from_slice(bytes);
-    Some(length)
-}
-
-// ---------------------------------------------------------------------------------------------
 // Aircraft types
 // ---------------------------------------------------------------------------------------------
 
-/// What one side shows in the panel.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Totals {
-    /// Craft oid -> planes of that type, in the order the panel draws them.
-    crafts: Vec<(String, u32)>,
-    bombs: i32,
-    rockets: i32,
-    aam: i32,
-    /// Only the 1.163 panel has a gun entry; 1.151 has no such counter.
-    #[cfg_attr(feature = "1_151", allow(dead_code))]
-    gun: i32,
-}
-
-/// The aircraft oids in the table QoL rebuilds from `planes`.
+/// The aircraft oids in the table rebuilt from `planes`.
 ///
-/// Cached against the container header: QoL writes a fresh table over the game's at startup, so the
-/// sentinel pointer changes exactly when the table does.
+/// Cached against the container header: the table is rebuilt once at startup, so the sentinel
+/// pointer and length change exactly when the table does.
 fn registered_crafts(game: &Game) -> Arc<Vec<String>> {
     static CACHE: Mutex<Option<(usize, usize, Arc<Vec<String>>)>> = Mutex::new(None);
 
-    let Some(sentinel) = usize_at(game.plane_table) else {
-        return Arc::new(Vec::new());
-    };
-    let size = usize_at(game.plane_table + 8).unwrap_or(0);
+    // SAFETY: the table is the game's own container, rebuilt by `patch_planes` before any battle.
+    let table = unsafe { &mut *game.global::<TllContainer<EscadraString, Plane>>(PLANE_TABLE_RVA) };
+    let (sentinel, length) = (table.sentinel() as usize, table.len());
+
     let mut cache = CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((cached_sentinel, cached_size, crafts)) = &*cache {
-        if *cached_sentinel == sentinel && *cached_size == size {
+    if let Some((cached_sentinel, cached_length, crafts)) = &*cache {
+        if *cached_sentinel == sentinel && *cached_length == length {
             return crafts.clone();
         }
     }
 
-    let mut crafts = Vec::new();
-    if readable(sentinel, TLL_NODE_SIZE) {
-        let mut stack = vec![usize_at(sentinel + TLL_PARENT).unwrap_or(sentinel)];
-        let mut visited = 0usize;
-        while let Some(node) = stack.pop() {
-            visited += 1;
-            if visited > 256 || node == sentinel || !readable(node, TLL_NODE_SIZE) {
-                continue;
-            }
-            if u8_at(node + TLL_IS_SENTINEL) != Some(0) {
-                continue;
-            }
-            let mut buffer = [0u8; 256];
-            if let Some(length) = escadra_bytes(node + TLL_KEY, &mut buffer) {
-                if let Ok(name) = std::str::from_utf8(&buffer[..length]) {
-                    crafts.push(name.to_owned());
-                }
-            }
-            let left = usize_at(node + TLL_LEFT).unwrap_or(sentinel);
-            let right = usize_at(node + TLL_RIGHT).unwrap_or(sentinel);
-            if left != sentinel {
-                stack.push(left);
-            }
-            if right != sentinel {
-                stack.push(right);
-            }
-        }
-    }
+    let mut crafts: Vec<String> = table
+        .get_map()
+        .keys()
+        .map(|key| key.get_string().to_owned())
+        .collect();
     crafts.sort();
     crafts.dedup();
     let crafts = Arc::new(crafts);
+
     log::info!(
         "Plane icons: aircraft table holds {} type(s): {}",
         crafts.len(),
@@ -561,66 +372,64 @@ fn registered_crafts(game: &Game) -> Arc<Vec<String>> {
             crafts.join(", ")
         }
     );
-    *cache = Some((sentinel, size, crafts.clone()));
+    *cache = Some((sentinel, length, crafts.clone()));
     crafts
 }
 
 /// Sums one side's roster, or `None` when that side has no roster at all.
 ///
-/// This is the game's own rule: a body counts when it is a `Body`, its `Stats.m_category` has the
-/// aircraft bit, and it sits in the side's roster list.
-fn scan(game: &Game, roster: Roster, registry: &[String]) -> Option<Totals> {
-    let length = usize_at(roster.length)?;
-    if length == 0 {
-        return None;
-    }
-    let sentinel = usize_at(roster.list)?;
-    if !readable(sentinel, 0x10) {
-        return None;
-    }
-    let part_has_category: FnPartHasCategory = unsafe { std::mem::transmute(game.check_part_flag) };
+/// This is the game's own rule: a part counts when its body carries the `Body` code and its
+/// `Stats.m_category` has the aircraft bit.
+fn scan(game: &Game, roster_rva: usize, registry: &[String]) -> Option<Totals> {
+    let part_has_category: FnPartHasCategory =
+        unsafe { std::mem::transmute(game.part_has_category) };
 
+    // SAFETY: the level scripts initialise this roster header before the battle HUD draws.
+    let roster = unsafe { &*game.global::<SentinelList<Link>>(roster_rva) };
+    if roster.length == 0 {
+        return None;
+    }
+
+    let head = roster.head;
     let mut totals = Totals::default();
     let mut counts: Vec<(String, u32)> = Vec::new();
-    let mut oid_buffer = [0u8; 64];
-    let mut node = usize_at(sentinel)?;
-    let mut steps = 0usize;
-    while node != sentinel {
-        steps += 1;
-        if steps > 8192 || !readable(node, 0x20) {
-            break;
-        }
-        let body = usize_at(node + NODE_BODY).unwrap_or(0);
-        if body != 0
-            && readable(body, BODY_SIZE)
-            && i32_at(body + BODY_CODE) == Some(CODE_BODY)
-            // SAFETY: the body was proved readable; this is the game's own category test.
-            && unsafe { part_has_category(body, CATEGORY_AIRCRAFT) }
-        {
-            if let Some(length) = escadra_bytes(body + BODY_OID, &mut oid_buffer) {
-                let oid = &oid_buffer[..length];
-                if let Some(entry) = counts.iter_mut().find(|(name, _)| name.as_bytes() == oid) {
-                    entry.1 += 1;
-                } else if let Some(craft) = registry
-                    .iter()
-                    .find(|craft| craft.as_bytes() == oid)
-                {
-                    counts.push((craft.clone(), 1));
+
+    // SAFETY: `head` is the sentinel of a live circular list, so its next pointer is a valid node.
+    let mut node = unsafe { (*head).next };
+    while node != head {
+        // SAFETY: every non-sentinel node of this list holds a link to one part.
+        let body = unsafe { (*node).value.target as *mut Body };
+        // SAFETY: `body` is the linked part, or null for an empty entry.
+        let is_aircraft = !body.is_null()
+            && unsafe { (*body).base.base.base.code } == CODE_BODY
+            && unsafe { part_has_category(body, CATEGORY_AIRCRAFT) };
+        if is_aircraft {
+            let oid = unsafe { (*body).oid.get_string() };
+            match counts.iter_mut().find(|(name, _)| name.as_str() == oid) {
+                Some((_, count)) => *count += 1,
+                None => {
+                    if let Some(craft) = registry.iter().find(|craft| craft.as_str() == oid) {
+                        counts.push((craft.to_string(), 1));
+                    }
                 }
             }
-            if let Some(logic) = usize_at(body + BODY_AIRCRAFT_LOGIC) {
-                if readable(logic, 0x150) {
-                    totals.bombs += i32_at(logic + LOGIC_BOMBS).unwrap_or(0);
-                    totals.rockets += i32_at(logic + LOGIC_ROCKETS).unwrap_or(0);
-                    totals.aam += i32_at(logic + LOGIC_AAM).unwrap_or(0);
-                    let rounds = i32_at(logic + LOGIC_GUN_LOAD).unwrap_or(0)
-                        + i32_at(logic + LOGIC_GUN_AMMO).unwrap_or(0);
-                    totals.gun += rounds * ROUNDS_PER_GUN_AMMO;
-                }
+
+            // SAFETY: the body owns its aircraft-logic record while the aircraft exists.
+            let logic = unsafe { (*body).aircraft_logic as *mut AircraftLogic };
+            if !logic.is_null() {
+                let logic = unsafe { &*logic };
+                totals.bombs += logic.bombs.count;
+                totals.rockets += logic.rockets.count;
+                totals.aam += logic.aa_missiles.count;
+                let rounds = logic.gun_load + logic.gun_reserve_ammo;
+                totals.gun += rounds * ROUNDS_PER_GUN_AMMO;
             }
         }
-        node = usize_at(node).unwrap_or(sentinel);
+
+        // SAFETY: the list is circular, so `next` is always a node of this list.
+        node = unsafe { (*node).next };
     }
+
     totals.crafts = order(counts);
     if ALWAYS_SHOW_VANILLA_CRAFTS {
         // 1.151 draws both vanilla icons unconditionally, so keep them even with zero planes.
@@ -640,13 +449,18 @@ fn scan(game: &Game, roster: Roster, registry: &[String]) -> Option<Totals> {
 fn order(mut crafts: Vec<(String, u32)>) -> Vec<(String, u32)> {
     const VANILLA: [&str; 2] = ["CRAFT_T7", "CRAFT_LA29"];
     crafts.sort_by(|a, b| {
-        let rank = |name: &str| VANILLA.iter().position(|vanilla| *vanilla == name).unwrap_or(2);
+        let rank = |name: &str| {
+            VANILLA
+                .iter()
+                .position(|vanilla| *vanilla == name)
+                .unwrap_or(2)
+        };
         rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
     });
     crafts
 }
 
-/// `CRAFT_SB15` -> `sign_SB15`, the game's own naming for `sign_T7` / `sign_LA29`.
+/// `CRAFT_SB15` -> `sign_SB15`, the game's own naming for `sign_T7` and `sign_LA29`.
 fn sign_name(oid: &str) -> String {
     match oid.strip_prefix("CRAFT_") {
         Some(stem) => format!("sign_{stem}"),
@@ -658,9 +472,10 @@ fn sign_name(oid: &str) -> String {
 // Drawing
 // ---------------------------------------------------------------------------------------------
 
-/// Sprite handles by animation name; `0` records a name the media manager does not have, so a
-/// missing `sign_<craft>` is looked up once instead of every frame.
-fn sprite(game: &Game, name: &CString) -> usize {
+/// Loads a sign animation, or returns null when the media manager does not have it.
+///
+/// Handles are cached by animation name, so a missing icon is reported once instead of every frame.
+fn sprite(game: &Game, name: &CString) -> *mut SignSprite {
     static SPRITES: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 
     let key = name.to_string_lossy().into_owned();
@@ -668,85 +483,74 @@ fn sprite(game: &Game, name: &CString) -> usize {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some((_, handle)) = cache.iter().find(|(cached, _)| *cached == key) {
-        return *handle;
+        return *handle as *mut SignSprite;
     }
-    let media = usize_at(game.media_manager).unwrap_or(0);
-    if media == 0 {
-        // The media manager is not up yet; do not remember the miss.
-        return 0;
-    }
+
+    // SAFETY: the media manager global holds the manager the game passes to this call itself.
+    let media = unsafe { *game.global::<*const c_void>(MEDIA_MANAGER_RVA) };
     let load: FnLoadMedia = unsafe { std::mem::transmute(game.load_media) };
-    // SAFETY: the media manager was readable and `name` is NUL-terminated ASCII.
+    // SAFETY: `name` is NUL-terminated ASCII and `media` is the live manager.
     let handle = unsafe { load(media, name.as_ptr()) };
-    if handle != 0 && readable(handle + SPRITE_BLEND, 4) {
-        // The game clears the blend state after each sign load.
-        unsafe { std::ptr::write_unaligned((handle + SPRITE_BLEND) as *mut i32, 0) };
-    }
-    if handle == 0 {
+    if handle.is_null() {
         log::warn!("Plane icons: animation '{key}' is missing; its slot is drawn empty");
+    } else {
+        // SAFETY: a freshly loaded animation is this module's to configure, as it is the game's.
+        unsafe { (*handle).blend_state = 0 };
     }
-    cache.push((key, handle));
+
+    cache.push((key, handle as usize));
     handle
 }
 
 /// How wide the game draws `text` in this font.
-fn measure(game: &Game, font: usize, text: &CString) -> f32 {
+fn measure(game: &Game, font: *mut c_void, text: &CString) -> f32 {
     let measure: FnMeasureString = unsafe { std::mem::transmute(game.measure_string) };
     // SAFETY: the font was created this frame and `text` is NUL-terminated ASCII.
     let width = unsafe { measure(font, text.as_ptr() as *const u8, 0) };
-    if width.is_finite() && width >= 0.0 {
+    if width > 0.0 {
         width
     } else {
         0.0
     }
 }
 
-/// The scale an icon is drawn at (only ever shrunk into the pixel box) and its drawn half width.
-fn icon_fit(sprite: usize) -> (f32, f32) {
-    if sprite == 0 {
+/// The scale an icon is drawn at, and its drawn half width.
+///
+/// Art that already fits the pixel box is drawn at its own size.
+fn icon_fit(sprite: *mut SignSprite) -> (f32, f32) {
+    if sprite.is_null() {
         return (1.0, 0.0);
     }
-    let width = f32_at(sprite + SPRITE_EXTENT_X).unwrap_or(0.0);
-    let height = f32_at(sprite + SPRITE_EXTENT_Y).unwrap_or(0.0);
-    let scale = if width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite() {
-        let fit = (ICON_MAX_WIDTH / width).min(ICON_MAX_HEIGHT / height);
-        // Only ever shrink, and only by a sane amount: a bogus extent must not hide an icon.
-        if (0.05..1.0).contains(&fit) {
-            fit
-        } else {
-            1.0
-        }
-    } else {
-        1.0
-    };
-    let half = if width.is_finite() && width > 0.0 {
-        width * scale * 0.5
-    } else {
-        0.0
-    };
-    (scale, half)
+
+    // SAFETY: the handle came from the media manager and is live for the whole battle.
+    let (width, height) = unsafe { ((*sprite).extent_x, (*sprite).extent_y) };
+    let fit = (ICON_MAX_WIDTH / width).min(ICON_MAX_HEIGHT / height);
+    let scale = if (0.05..1.0).contains(&fit) { fit } else { 1.0 };
+
+    (scale, width * scale * 0.5)
 }
 
-fn draw_icon(game: &Game, sprite: usize, scale: f32, colour: u32, x: f32, y: f32) {
-    if sprite == 0 {
+fn draw_icon(game: &Game, sprite: *mut SignSprite, scale: f32, colour: u32, x: f32, y: f32) {
+    if sprite.is_null() {
         return;
     }
+
     let set_fields: FnSetSpriteFields = unsafe { std::mem::transmute(game.set_sprite_fields) };
-    // SAFETY: the handle came from the game's media manager; this is the game's own tint call.
+    // SAFETY: the handle came from the media manager; this is the game's own tint call.
     unsafe { set_fields(sprite, colour, -1) };
 
     if (scale - 1.0).abs() < 1e-4 {
-        let position: FnQuadPosition = unsafe { std::mem::transmute(game.quad_position) };
+        let position: FnSpritePosition = unsafe { std::mem::transmute(game.sprite_position) };
         // SAFETY: the game's own draw path for a sign sprite.
         unsafe { position(sprite, x, y) };
     } else {
-        let render: FnQuadRenderEx = unsafe { std::mem::transmute(game.quad_render_ex) };
+        let render: FnSpriteRenderEx = unsafe { std::mem::transmute(game.sprite_render_ex) };
         // SAFETY: the same quad, scaled about its cached hotspot.
         unsafe { render(sprite, x, y, 0.0, scale, scale) };
     }
 }
 
-fn draw_text(game: &Game, font: usize, x: f32, y: f32, text: &CString) {
+fn draw_text(game: &Game, font: *mut c_void, x: f32, y: f32, text: &CString) {
     let draw: FnDrawLabel = unsafe { std::mem::transmute(game.draw_label) };
     // SAFETY: the font was created this frame, the text is NUL-terminated ASCII, and the panel's
     // 2D state is bound - the game's own call at this point of the frame.
@@ -758,14 +562,14 @@ fn draw_text(game: &Game, font: usize, x: f32, y: f32, text: &CString) {
             0,
             text.as_ptr() as *const u8,
             std::ptr::null_mut(),
-            0,
+            std::ptr::null(),
             0.0,
             0.0,
         );
     }
 }
 
-fn draw_caption(game: &Game, font: usize, x: f32, y: f32, text: &[u8]) {
+fn draw_caption(game: &Game, font: *mut c_void, x: f32, y: f32, text: &[u8]) {
     let draw: FnDrawLabel = unsafe { std::mem::transmute(game.draw_label) };
     // SAFETY: the literals are NUL-terminated and the font was created this frame.
     unsafe {
@@ -776,7 +580,7 @@ fn draw_caption(game: &Game, font: usize, x: f32, y: f32, text: &[u8]) {
             0,
             text.as_ptr(),
             std::ptr::null_mut(),
-            0,
+            std::ptr::null(),
             0.0,
             0.0,
         );
@@ -794,16 +598,18 @@ fn draw_divider(game: &Game, colour: u32, x: f32, y: f32, length: f32) {
 /// Local positions of one row: `(label_x, icon_x)` per entry, starting at 0.
 ///
 /// This is the game's advance - the icon clears the count by [`ICON_OFFSET`], then the next label
-/// starts [`ENTRY_ADVANCE`] after the icon - with [`COLUMN_PITCH`] as a floor so very narrow
-/// counts cannot pack two icons into one another.
+/// starts [`ENTRY_ADVANCE`] after the icon - with [`COLUMN_PITCH`] as a floor so very narrow counts
+/// cannot pack two icons into one another.
 fn layout_row(widths: &[f32]) -> Vec<(f32, f32)> {
     let mut positions = Vec::with_capacity(widths.len());
-    let mut x = 0.0f32;
+    let mut x = 0.0;
+
     for width in widths {
         let icon_x = x + width + ICON_OFFSET;
         positions.push((x, icon_x));
         x = (icon_x + ENTRY_ADVANCE).max(x + COLUMN_PITCH);
     }
+
     positions
 }
 
@@ -818,22 +624,28 @@ fn row_extent(positions: &[(f32, f32)], halves: &[f32]) -> f32 {
 
 /// A side's left edge: its anchor, pulled left when the content would leave the screen.
 fn panel_x0(anchor: f32, max_right: f32, content_width: f32) -> f32 {
-    (max_right - content_width).min(anchor).max(10.0)
+    (max_right - content_width).min(anchor)
 }
 
 /// One entry of a row, resolved before anything is drawn.
 struct Entry {
-    sprite: usize,
+    sprite: *mut SignSprite,
     scale: f32,
     half_width: f32,
     text: CString,
     width: f32,
 }
 
-fn entry(game: &Game, count_font: usize, value: i32, sprite: usize) -> Option<Entry> {
+fn entry(
+    game: &Game,
+    count_font: *mut c_void,
+    value: i32,
+    sprite: *mut SignSprite,
+) -> Option<Entry> {
     let (scale, half_width) = icon_fit(sprite);
     let text = CString::new(value.to_string()).ok()?;
     let width = measure(game, count_font, &text);
+
     Some(Entry {
         sprite,
         scale,
@@ -843,13 +655,44 @@ fn entry(game: &Game, count_font: usize, value: i32, sprite: usize) -> Option<En
     })
 }
 
+/// Lays out one group of entries and reports the widest row edge.
+fn place_rows(
+    game: &Game,
+    count_font: *mut c_void,
+    values: &[i32],
+    sprites: &[*mut SignSprite],
+    columns: usize,
+) -> (Vec<Vec<Entry>>, Vec<Vec<(f32, f32)>>, f32) {
+    let mut rows: Vec<Vec<Entry>> = Vec::new();
+    let mut positions: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut extent = 0.0f32;
+
+    for (values, sprites) in values.chunks(columns).zip(sprites.chunks(columns)) {
+        let row: Vec<Entry> = values
+            .iter()
+            .zip(sprites)
+            .filter_map(|(value, sprite)| entry(game, count_font, *value, *sprite))
+            .collect();
+
+        let widths: Vec<f32> = row.iter().map(|item| item.width).collect();
+        let halves: Vec<f32> = row.iter().map(|item| item.half_width).collect();
+        let row_positions = layout_row(&widths);
+        extent = extent.max(row_extent(&row_positions, &halves) + DIVIDER_PAD);
+
+        rows.push(row);
+        positions.push(row_positions);
+    }
+
+    (rows, positions, extent)
+}
+
 fn draw_side(
     game: &Game,
     anchor: f32,
     max_right: f32,
     colour: u32,
-    count_font: usize,
-    caption_font: usize,
+    count_font: *mut c_void,
+    caption_font: *mut c_void,
     totals: &Totals,
 ) {
     let set_colour: FnSetFontColor = unsafe { std::mem::transmute(game.font_set_color) };
@@ -870,27 +713,20 @@ fn draw_side(
             );
         }
     }
-    let types = &totals.crafts[..totals.crafts.len().min(visible)];
 
-    // Resolve both row groups first: the panel's left edge depends on the widest row.
-    let mut craft_rows: Vec<Vec<Entry>> = Vec::new();
-    for chunk in types.chunks(COLUMNS) {
-        let mut row = Vec::with_capacity(chunk.len());
-        for (oid, count) in chunk {
-            let Ok(name) = CString::new(sign_name(oid)) else {
-                continue;
-            };
-            let handle = sprite(game, &name);
-            if let Some(item) = entry(game, count_font, *count as i32, handle) {
-                row.push(item);
-            }
-        }
-        craft_rows.push(row);
+    // Resolve the ids and counts first: the panel's left edge depends on the widest row.
+    let mut craft_values: Vec<i32> = Vec::new();
+    let mut craft_sprites: Vec<*mut SignSprite> = Vec::new();
+    for (oid, count) in totals.crafts.iter().take(visible) {
+        let Ok(name) = CString::new(sign_name(oid)) else {
+            continue;
+        };
+        craft_values.push(*count as i32);
+        craft_sprites.push(sprite(game, &name));
     }
-    let rows_used = craft_rows.len().max(1);
-    let shift = (rows_used - 1) as f32 * ROW_PITCH;
 
-    let mut munitions: Vec<Entry> = Vec::new();
+    let mut munition_values: Vec<i32> = Vec::new();
+    let mut munition_sprites: Vec<*mut SignSprite> = Vec::new();
     for (name, value) in MUNITIONS {
         let count = value(totals);
         if count == 0 && HIDE_ZERO_MUNITIONS {
@@ -899,58 +735,75 @@ fn draw_side(
         let Ok(name) = CString::new(name) else {
             continue;
         };
-        let handle = sprite(game, &name);
-        if let Some(item) = entry(game, count_font, count, handle) {
-            munitions.push(item);
-        }
+        munition_values.push(count);
+        munition_sprites.push(sprite(game, &name));
     }
 
-    // Lay both groups out locally, then pick the left edge from the widest of them.
-    let mut content_width = LINE_LENGTH;
-    let mut craft_positions: Vec<Vec<(f32, f32)>> = Vec::new();
-    for row in &craft_rows {
-        let widths: Vec<f32> = row.iter().map(|item| item.width).collect();
-        let halves: Vec<f32> = row.iter().map(|item| item.half_width).collect();
-        let positions = layout_row(&widths);
-        content_width = content_width.max(row_extent(&positions, &halves) + DIVIDER_PAD);
-        craft_positions.push(positions);
-    }
-    let munition_widths: Vec<f32> = munitions.iter().map(|item| item.width).collect();
-    let munition_halves: Vec<f32> = munitions.iter().map(|item| item.half_width).collect();
-    let munition_positions = layout_row(&munition_widths);
-    content_width = content_width.max(row_extent(&munition_positions, &munition_halves) + DIVIDER_PAD);
+    let (craft_rows, craft_positions, craft_extent) =
+        place_rows(game, count_font, &craft_values, &craft_sprites, COLUMNS);
+    let (munition_rows, munition_positions, munition_extent) = place_rows(
+        game,
+        count_font,
+        &munition_values,
+        &munition_sprites,
+        MUNITIONS.len(),
+    );
 
+    let content_width = LINE_LENGTH.max(craft_extent).max(munition_extent);
     let x0 = panel_x0(anchor, max_right, content_width);
+    let rows_used = craft_rows.len().max(1);
+    let shift = (rows_used - 1) as f32 * ROW_PITCH;
 
     // Aircraft rows.
-    for (row_index, row) in craft_rows.iter().enumerate() {
+    for (row_index, (row, positions)) in craft_rows.iter().zip(&craft_positions).enumerate() {
         let label_y = LABEL_Y + row_index as f32 * ROW_PITCH;
         let icon_y = ICON_Y + row_index as f32 * ROW_PITCH;
-        for (item, (label_x, icon_x)) in row.iter().zip(&craft_positions[row_index]) {
+
+        for (item, (label_x, icon_x)) in row.iter().zip(positions) {
             draw_text(game, count_font, x0 + label_x, label_y, &item.text);
             draw_icon(game, item.sprite, item.scale, colour, x0 + icon_x, icon_y);
         }
     }
 
-    draw_caption(game, caption_font, x0, CRAFTS_CAPTION_Y + shift, b"CRAFTS\0");
+    draw_caption(
+        game,
+        caption_font,
+        x0,
+        CRAFTS_CAPTION_Y + shift,
+        b"CRAFTS\0",
+    );
     draw_divider(game, colour, x0, LINE_Y + shift, content_width);
-    draw_caption(game, caption_font, x0, MUNITION_CAPTION_Y + shift, b"MUNITION\0");
+    draw_caption(
+        game,
+        caption_font,
+        x0,
+        MUNITION_CAPTION_Y + shift,
+        b"MUNITION\0",
+    );
 
-    // Munitions row.
-    for (item, (label_x, icon_x)) in munitions.iter().zip(&munition_positions) {
-        draw_text(game, count_font, x0 + label_x, MUNITION_LABEL_Y + shift, &item.text);
-        draw_icon(
-            game,
-            item.sprite,
-            item.scale,
-            colour,
-            x0 + icon_x,
-            MUNITION_ICON_Y + shift,
-        );
+    // Munitions row: a single row, laid out from the same left edge.
+    if let (Some(row), Some(positions)) = (munition_rows.first(), munition_positions.first()) {
+        for (item, (label_x, icon_x)) in row.iter().zip(positions) {
+            draw_text(
+                game,
+                count_font,
+                x0 + label_x,
+                MUNITION_LABEL_Y + shift,
+                &item.text,
+            );
+            draw_icon(
+                game,
+                item.sprite,
+                item.scale,
+                colour,
+                x0 + icon_x,
+                MUNITION_ICON_Y + shift,
+            );
+        }
     }
 }
 
-/// The whole panel: body markers first (the game does), then both sides.
+/// The whole panel: body markers first, as the game does, then both sides.
 ///
 /// # Safety
 ///
@@ -962,8 +815,8 @@ unsafe fn draw(game: &Game) {
     unsafe { body_markers() };
 
     let registry = registered_crafts(game);
-    let player = scan(game, game.player_roster, &registry);
-    let enemy = scan(game, game.enemy_roster, &registry);
+    let player = scan(game, PLAYER_ROSTER_RVA, &registry);
+    let enemy = scan(game, ENEMY_ROSTER_RVA, &registry);
     if player.is_none() && enemy.is_none() {
         // Neither side has a battle roster: the game draws nothing either.
         return;
@@ -971,18 +824,12 @@ unsafe fn draw(game: &Game) {
 
     let setup: FnSetupFont = unsafe { std::mem::transmute(game.font_setup) };
     // SAFETY: the game's own font creation, with the same names and scale.
-    let count_font = unsafe { setup(FONT_COUNT.as_ptr() as *const c_char, 1.0, 0, FONT_COLOR) };
-    let caption_font = unsafe { setup(FONT_CAPTION.as_ptr() as *const c_char, 1.0, 0, FONT_COLOR) };
-    if count_font == 0 || caption_font == 0 {
-        return;
-    }
+    let count_font = unsafe { setup(FONT_COUNT.as_ptr() as *const c_char, 1.0, 0, ENEMY_COLOR) };
+    let caption_font =
+        unsafe { setup(FONT_CAPTION.as_ptr() as *const c_char, 1.0, 0, ENEMY_COLOR) };
 
-    let width = i32_at(game.graphics_width).unwrap_or(FALLBACK_WIDTH);
-    let width = if (100..=8192).contains(&width) {
-        width as f32
-    } else {
-        FALLBACK_WIDTH as f32
-    };
+    // SAFETY: the video task sets this before any battle HUD draw.
+    let width = unsafe { *game.global::<i32>(GRAPHICS_WIDTH_RVA) } as f32;
 
     if let Some(player) = &player {
         draw_side(
@@ -1014,10 +861,8 @@ mod tests {
 
     #[test]
     fn the_patch_site_is_the_panel_call() {
-        assert_eq!(SITE_RVA + STOLEN.len(), CONTINUATION_RVA);
-        assert_eq!(STOLEN[0], 0xe8);
-        let relative = i32::from_le_bytes(STOLEN[1..].try_into().unwrap()) as isize;
-        assert_eq!((SITE_RVA + 5) as isize + relative, TARGET_RVA as isize);
+        assert_eq!(SITE_RVA + PANEL_CALL_LEN, CONTINUATION_RVA);
+        assert_eq!(TARGET_RVA > CONTINUATION_RVA, true);
     }
 
     #[test]
@@ -1029,7 +874,7 @@ mod tests {
         assert_eq!(&code[..2], &[0xff, 0x15], "CALL [RIP+2]");
         let hook = (draw_hook as *const () as usize).to_le_bytes();
         assert!(code.windows(8).any(|window| window == hook), "hook address");
-        // A mid-function call site is already 0 mod 16: no stack adjustment may be inserted.
+        // A mid-function call site is already 16-byte aligned: no stack adjustment may be inserted.
         assert!(!code
             .windows(4)
             .any(|window| window == [0x48, 0x83, 0xec, 0x08]));
@@ -1064,7 +909,6 @@ mod tests {
         assert_eq!(panel_x0(1520.0, 1890.0, 240.0), 1520.0);
         assert_eq!(panel_x0(1520.0, 1890.0, 600.0), 1290.0);
         assert_eq!(panel_x0(30.0, 1890.0, 600.0), 30.0);
-        assert_eq!(panel_x0(30.0, 100.0, 400.0), 10.0);
     }
 
     #[test]

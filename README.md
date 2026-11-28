@@ -147,7 +147,9 @@ Older configurations that store each plane as a loadout array are still accepted
 
 ### Aircraft icons
 
-The battle screen's aircraft panel draws one icon per aircraft type from an animation named `sign_<aircraft name>`, the same convention the game uses for its own two types: `CRAFT_T7` uses `sign_T7`, `CRAFT_LA29` uses `sign_LA29`, so a `CRAFT_SB15` needs `sign_SB15`. Add the animation to any `.res` file included by `Media/media.res` and point it at whatever texture holds the art:
+The battle screen's aircraft panel draws one icon per aircraft type from an animation named `sign_<aircraft name>`.
+That is the same convention the game uses for its own two types: `CRAFT_T7` uses `sign_T7` and `CRAFT_LA29` uses `sign_LA29`, so a `CRAFT_SB15` needs `sign_SB15`.
+Add the animation to any `.res` file included by `Media/media.res` and point it at whatever texture holds the art:
 
 ```plaintext
 Animation sign_SB15
@@ -159,7 +161,9 @@ Animation sign_SB15
 }
 ```
 
-`sign_T7` is 58 x 73; art larger than that is shrunk to fit, so a 98 x 98 icon also works. A type whose animation is missing is still listed with its count, but its icon slot stays empty. Names are logged once when the panel first asks for them.
+`sign_T7` is 58 x 73; art larger than that is shrunk to fit, so a 98 x 98 icon also works.
+A type whose animation is missing is still listed with its count, but its icon slot stays empty.
+Names are logged once when the panel first asks for them.
 
 ### Aircraft gun ammo
 

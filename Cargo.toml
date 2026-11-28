@@ -19,6 +19,5 @@ highfleet = { path = "highfleet-rs" }
 libc = "0.2.177"
 patchy = { package = "highfleet-patchy-client", git = "https://github.com/logdot/Highfleet-Modloader.git", rev = "5547834da9543827f3023619ae6c4cb2474bf949" }
 windows-sys = { version = "0.61", features = [
-    "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
