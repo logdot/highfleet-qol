@@ -35,6 +35,7 @@ This is what the file looks like by default:
   "enable_unblocked_guns": false,
   "enable_reduced_shake": false,
   "enable_flare_crash_fix": true,
+  "enable_antitilt_fps_fix": true,
   "enable_intro": false,
   "enemy_laser_warning": true,
   "enemy_sound_warning": true,
@@ -73,6 +74,9 @@ The list of toggles is:
 8. Pre-Fire Warnings (Steam 1.163 only): Set `"enemy_laser_warning": false` to hide gun pre-fire warning lines for both sides, including friendly and allied ships.
    Set `"enemy_sound_warning": false` to mute the enemy pre-fire sound warning.
    Both default to `true` and work independently.
+9. Anti-Tilt FPS Fix: Raising `CORE_FRAMERATE` in `Config.ini` makes the engines level a ship faster than the game intends.
+   QOL keeps the levelling the same at any frame rate, and nothing changes at 50 fps.
+   Compatible with `hf_wish_tilt`; set `"enable_antitilt_fps_fix": false` if another mod should apply the scaling instead.
 
 ## Refuel rate and speed curve (1.163 only)
 
