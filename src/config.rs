@@ -29,6 +29,17 @@ use crate::plane as plane_runtime;
 /// The default values provide the standard QOL experience while leaving more disruptive gameplay changes turned off.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
+    /// Shows every aircraft type of the `planes` section in the battle aircraft panel, not just
+    /// the T-7 and LA-29.
+    ///
+    /// The panel keeps the game's own layout, colours, counts and munitions. Each type needs an
+    /// animation named `sign_<aircraft name>` in a `.res` file (for example `sign_SB15` for
+    /// `CRAFT_SB15`); a type without one still shows its count, with an empty slot for the icon.
+    /// Up to three types are listed per row, and up to three rows.
+    ///
+    /// Enabled by default. Works on Steam 1.151 and 1.163.
+    #[serde(default = "default_plane_icons_rework")]
+    pub enable_plane_icons_rework: bool,
     /// Stops mod-added combat interface elements from moving with screen shake.
     ///
     /// Disabled by default.
@@ -176,6 +187,10 @@ fn default_enabled() -> bool {
     true
 }
 
+fn default_plane_icons_rework() -> bool {
+    true
+}
+
 fn default_sell_multiplier() -> f32 {
     1.0
 }
@@ -198,6 +213,7 @@ impl Default for Config {
         let plane_config = plane_runtime::get_planes();
 
         Self {
+            enable_plane_icons_rework: true,
             enable_anti_wobble: false,
             enable_unblocked_guns: false,
             enable_reduced_shake: false,

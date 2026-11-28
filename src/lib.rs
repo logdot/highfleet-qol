@@ -27,6 +27,7 @@ mod parts;
 mod plane;
 mod plane_guns;
 mod plane_health;
+mod plane_icons;
 #[cfg(not(feature = "1_151"))]
 mod refuel;
 mod replay_call;
@@ -192,6 +193,15 @@ unsafe extern "C" fn init() -> bool {
         &mut patch_session,
         config.sell_multiplier
     ));
+
+    if config.enable_plane_icons_rework {
+        // Optional: a build mismatch must cost the panel, not the rest of qol.
+        if let Err(error) = plane_icons::patch_plane_icons(&mut patch_session) {
+            log::warn!("Plane icons rework not prepared: {error}");
+        }
+    } else {
+        log::info!("Plane icons rework disabled");
+    }
 
     #[cfg(not(feature = "1_151"))]
     {
