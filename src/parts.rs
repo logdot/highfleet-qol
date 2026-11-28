@@ -72,12 +72,18 @@ const HOOK_ADDRESS: usize = 0x140299c5c;
 #[cfg(any(feature = "1_163", not(any(feature = "1_151", feature = "1_163"))))]
 const HOOK_ADDRESS: usize = 0x1402bcd49;
 
-/// Prepares a shop-generation patch that includes custom parts.
+/// Prepares a shop-generation patch that includes custom parts and/or part menus.
 ///
 /// `parts` is a map of part model ID strings (e.g. `"MDL_WEAPON_01"`) to their
 /// [`ShopPart`] configuration (probability, min/max count). Each time a shop is
 /// generated the probability is rolled independently per part; if it passes, a
 /// random count in `[min_parts, max_parts]` is chosen.
+///
+/// `menus` is the part-menu configuration. Each menu whose rule matches the
+/// city is injected by [`crate::part_menus::inject_menus`] as a shop bar.
+///
+/// The hook is installed when either list is non-empty, because both features
+/// share the same shop-generation site.
 ///
 /// # Safety
 /// Must be called while the game process memory is accessible and before the shop
@@ -85,9 +91,10 @@ const HOOK_ADDRESS: usize = 0x1402bcd49;
 pub unsafe fn patch_custom_parts(
     session: &mut PatchSession,
     parts: HashMap<String, Vec<ShopPart>>,
+    menus: &[crate::config::PartMenuConfig],
 ) -> Result {
-    if parts.is_empty() {
-        log::info!("No custom parts to inject, skipping patch.");
+    if parts.is_empty() && menus.is_empty() {
+        log::info!("No custom parts or part menus to inject, skipping patch.");
         return Ok(());
     }
 
@@ -96,60 +103,64 @@ pub unsafe fn patch_custom_parts(
         return Ok(());
     }
 
-    // Convert to CustomPart structs with stable CString pointers.
-    // Each part name can have multiple ShopPart entries (e.g. different
-    // probabilities per city type), so we flatten them all into one list.
-    let custom_parts: Vec<CustomPart> = parts
-        .into_iter()
-        .flat_map(|(name, cfgs)| {
-            let cs = match CString::new(name.clone()) {
-                Ok(cs) => cs,
-                Err(e) => {
-                    log::error!("Invalid part string '{}': {}", name, e);
-                    return Vec::new();
-                }
-            };
-
-            cfgs.into_iter()
-                .filter_map({
-                    let name = name.clone();
-                    let cs = cs.clone();
-                    move |cfg| {
-                        let probability = cfg.probability.clamp(0.0, 1.0);
-                        let min_parts = cfg.min_parts.max(1);
-                        let max_parts = cfg.max_parts.max(min_parts);
-                        log::info!(
-                            "  Part '{}': probability={:.0}%, count=[{}, {}]",
-                            name,
-                            probability * 100.0,
-                            min_parts,
-                            max_parts,
-                        );
-                        let city_types = cfg.city_types.clone();
-                        if !city_types.is_empty() {
-                            log::info!("    city_types={:?}", city_types);
-                        }
-                        Some(CustomPart {
-                            moid: cs.clone(),
-                            probability,
-                            min_parts,
-                            max_parts,
-                            city_types,
-                        })
+    let mut custom_parts: Vec<CustomPart> = Vec::new();
+    if !parts.is_empty() {
+        // Convert to CustomPart structs with stable CString pointers.
+        // Each part name can have multiple ShopPart entries (e.g. different
+        // probabilities per city type), so we flatten them all into one list.
+        custom_parts = parts
+            .into_iter()
+            .flat_map(|(name, cfgs)| {
+                let cs = match CString::new(name.clone()) {
+                    Ok(cs) => cs,
+                    Err(e) => {
+                        log::error!("Invalid part string '{}': {}", name, e);
+                        return Vec::new();
                     }
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+                };
 
-    if custom_parts.is_empty() {
+                cfgs.into_iter()
+                    .filter_map({
+                        let name = name.clone();
+                        let cs = cs.clone();
+                        move |cfg| {
+                            let probability = cfg.probability.clamp(0.0, 1.0);
+                            let min_parts = cfg.min_parts.max(1);
+                            let max_parts = cfg.max_parts.max(min_parts);
+                            log::info!(
+                                "  Part '{}': probability={:.0}%, count=[{}, {}]",
+                                name,
+                                probability * 100.0,
+                                min_parts,
+                                max_parts,
+                            );
+                            let city_types = cfg.city_types.clone();
+                            if !city_types.is_empty() {
+                                log::info!("    city_types={:?}", city_types);
+                            }
+                            Some(CustomPart {
+                                moid: cs.clone(),
+                                probability,
+                                min_parts,
+                                max_parts,
+                                city_types,
+                            })
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    }
+
+    if custom_parts.is_empty() && menus.is_empty() {
         log::warn!("All custom part strings were invalid, skipping patch.");
         return Ok(());
     }
 
     log::info!(
-        "Preparing shop-generation patch for up to {} custom part type(s).",
-        custom_parts.len()
+        "Preparing shop-generation patch for up to {} custom part type(s) and {} part menu(s).",
+        custom_parts.len(),
+        menus.len()
     );
 
     // Seed the RNG once at init time.
@@ -266,5 +277,13 @@ unsafe extern "C" fn inject_custom_parts() {
 
         let moid_ptr = part.moid.as_ptr() as *const u8;
         define_part(all_part_library, moid_ptr, category_node, count);
+    }
+
+    // Part menus share this hook. They inject one bar per matching rule into
+    // the same city shop node.
+    #[cfg(not(feature = "1_151"))]
+    {
+        let city = *(CATEGORY_ROOT_PTR as *const usize);
+        crate::part_menus::inject_menus(category_node as usize, city, city_type);
     }
 }

@@ -77,6 +77,8 @@ The list of toggles is:
 9. Anti-Tilt FPS Fix: Raising `CORE_FRAMERATE` in `Config.ini` makes the engines level a ship faster than the game intends.
    QOL keeps the levelling the same at any frame rate, and nothing changes at 50 fps.
    Compatible with `hf_wish_tilt`; set `"enable_antitilt_fps_fix": false` if another mod should apply the scaling instead.
+10. Part Menus (Steam 1.163 only): Add entries to `part_menus` to create shop bars with their own parts, stock and resource.
+   See [Part menus](#part-menus).
 
 ## Refuel rate and speed curve (1.163 only)
 
@@ -150,3 +152,65 @@ A loadout can use `gun_ammo` to select any aircraft-gun ammo definition availabl
 Omit `gun_ammo` (or set it to `null`) for a loadout without a gun. Existing configurations using `"has_gun37mm": true` remain supported and are interpreted as `"gun_ammo": "ITEM_GUN37"`.
 
 The selected definition must be an aircraft-gun ammo (`reticle` 4) with a positive gun capacity. If the definition is missing or invalid, the game falls back to `ITEM_GUN37` for that launch.
+
+## Part menus
+
+City shops normally sell resource parts through five bars (`Hull`, `Armor`, `Fuel`, `Ammo`, `Leg`), and every part without a resource gets its own row.
+A part menu is a bar of your own that appears in a matching city shop with a stock count and opens a flyout with the parts you configure, so those parts no longer clutter the shop row.
+Part menus target Steam 1.163.
+
+```json
+"part_menus": [
+  {
+    "bar": "ITEM_PAPERS",
+    "parts": [
+      "MDL_QUARTERS_01",
+      "MDL_QUARTERS_02",
+      { "oid": "MDL_GENERATOR_01", "cost": 2 }
+    ],
+    "resource": "custom",
+    "rules": [
+      { "probability": 1.0, "min_parts": 20, "max_parts": 40, "city_types": [] },
+      { "probability": 0.25, "city_types": [7] }
+    ]
+  }
+]
+```
+
+* `bar` is the `m_oid` of the shop bar.
+  It must exist in `parts.seria` and have a record in `OL.seria`, which gives it its icon and name.
+  A bar with a vanilla menu oid (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`, `ITEM_AMMO` or `ITEM_LEG`) does not create a new bar: its `parts` are appended to that existing menu instead.
+* `parts` are the parts offered by the menu, in order.
+  A bare string uses the part's native resource count for a vanilla bar (a 2x1 armor plate costs two units) and one unit for a custom resource.
+  The object form sets an explicit `cost`.
+* `resource` selects what the menu spends:
+  * omitted: a vanilla bar uses its own resource and any other bar gets a new custom resource;
+  * `"custom"`: a new custom resource, independent of hull/armor/fuel/ammo/leg;
+  * `"hull"`, `"armor"`, `"fuel"`, `"ammo"`, `"leg"` or `10`/`20`/`30`/`40`/`50`: the matching vanilla resource, and the bar oid must then be the matching `ITEM_*` bar;
+  * `"none"`: no resource gating, so the parts cost money only.
+* `rules` is one rule or an array.
+  The first rule whose `city_types` matches the current city is used, and an empty list matches every city type.
+  `probability` decides whether the menu appears, and for a new bar `min_parts`/`max_parts` are its starting stock.
+  For a vanilla bar the stock is the game's, so only `probability` and `city_types` matter.
+  An omitted `rules` means one rule with probability 1 and stock 1.
+
+Each resource unit is one use of the bar: with stock 20 and a part that costs 2, that part can be bought ten times.
+The game's own purchase path is used, so the stock, the money price and the "not enough stock" refusal all behave like a vanilla bar.
+A bar bought into the player's inventory keeps its menu there and is a resource body, not a ship part: dragging it onto a ship is refused, and it is meant to be used as a stock counter from the shop or inventory list.
+
+The same menu can appear in the shipworks editor.
+The editor row is built from `Libraries/constructor.seria`, so add a body with the menu's bar oid to that file (any existing `ITEM_*` entry can be copied and renamed).
+Hovering that button opens the menu, and clicking it does not attach it.
+City shops need no such edit: the bar is injected into every matching city automatically.
+
+For a new bar use an oid that has a body prototype in `parts.seria`, not just a stats record in `OL.seria`, and a price of 0.
+`ITEM_PAPERS` is a working example, while `MDL_BLOCK4X4_01` is not because it only has stats.
+Prefer an oid that appears once in `parts.seria`: a repeated oid makes `DefinePart` clone the first match, which may be a variant the placement code rejects.
+A part with a non-zero price charges that price per resource unit.
+
+`ShipworksExtended` hooks the same `BottomMenu_`/`ClickFunc` call sites for its own custom menus.
+Whichever mod loads first owns those hooks (`highfleet_qol.dll` sorts before `ShipworksExtended.dll`, so QOL wins), and the other mod logs that its hook could not be installed.
+Configure the menus in one place; `ShipworksExtended`'s editor palette loader is independent and keeps working.
+
+
+

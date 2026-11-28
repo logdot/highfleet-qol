@@ -23,6 +23,8 @@ mod flare_crash;
 mod guns;
 #[cfg(not(feature = "1_151"))]
 mod intro;
+#[cfg(not(feature = "1_151"))]
+mod part_menus;
 mod parts;
 mod plane;
 mod plane_guns;
@@ -178,14 +180,31 @@ unsafe extern "C" fn init() -> bool {
     prepare_patch!(plane_guns::patch_plane_guns(&mut patch_session));
     prepare_patch!(plane_health::patch_plane_health(&mut patch_session));
 
-    if config.enable_shop_parts {
+    #[cfg(not(feature = "1_151"))]
+    let part_menus = config.part_menus.as_slice();
+    #[cfg(feature = "1_151")]
+    let part_menus: &[crate::config::PartMenuConfig] = &[];
+
+    if config.enable_shop_parts || !part_menus.is_empty() {
         prepare_patch!(parts::patch_custom_parts(
             &mut patch_session,
-            config.shop_parts
+            config.shop_parts,
+            part_menus
         ));
-        log::info!("Custom parts enabled");
+        if config.enable_shop_parts {
+            log::info!("Custom parts enabled");
+        }
+        if !part_menus.is_empty() {
+            log::info!("Part menus enabled");
+        }
     } else {
         log::info!("Custom parts disabled");
+        log::info!("Part menus disabled");
+    }
+
+    #[cfg(not(feature = "1_151"))]
+    if !part_menus.is_empty() {
+        prepare_patch!(part_menus::prepare(&mut patch_session, part_menus));
     }
 
     prepare_patch!(sell_multiplier::patch_sell_multiplier(
