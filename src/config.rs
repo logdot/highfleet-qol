@@ -4,10 +4,13 @@
 //! If that file does not exist, QOL creates one using [`Config::default`].
 //! Most users can change the generated JSON file directly without needing to work with Rust code.
 
-use std::{collections::HashMap, error::Error};
+use std::{collections::HashMap, error::Error, fmt, num::NonZeroU32};
 
 use highfleet::general::EscadraString;
-use serde::{de::Deserializer, Deserialize, Serialize};
+use serde::{
+    de::{self, Deserializer, Visitor},
+    Deserialize, Serialize,
+};
 
 mod elevation_rules;
 mod loadout;
@@ -102,17 +105,11 @@ pub struct Config {
     /// Multiple rules are useful when it should have different chances or quantities in different city types.
     #[serde(default, deserialize_with = "deserialize_shop_parts")]
     pub shop_parts: HashMap<String, Vec<ShopPart>>,
-    /// Enables custom part menus: shop bars that open their own list of parts.
-    ///
-    /// Disabled by default.
-    #[serde(default)]
-    pub enable_part_menus: bool,
     /// Part menus to add to city shops and the shipworks.
     ///
     /// Each entry is a bar (an `m_oid` with stats) plus the parts it offers.
-    /// A menu with a vanilla bar oid (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`,
-    /// `ITEM_AMMO` or `ITEM_LEG`) adds its parts to that existing menu; every
-    /// other bar oid becomes a new part menu with its own stock.
+    /// A menu with a vanilla bar oid (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`, `ITEM_AMMO` or `ITEM_LEG`) adds its parts to that existing menu.
+    /// Every other bar oid becomes a new part menu with its own stock.
     #[serde(default)]
     pub part_menus: Vec<PartMenuConfig>,
     /// Multiplies the money received when selling ship parts.
@@ -211,16 +208,14 @@ where
 pub struct PartMenuConfig {
     /// `m_oid` of the shop bar / constructor button.
     ///
-    /// For a new menu, the oid must exist in `parts.seria` and have a record in
-    /// `OL.seria` (that record supplies the icon and name). For a vanilla bar oid
-    /// (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`, `ITEM_AMMO`, `ITEM_LEG`) the parts
-    /// are added to that existing menu instead and no new bar is created.
+    /// For a new menu the oid must exist in `parts.seria` and have a record in `OL.seria`.
+    /// That record supplies the icon and name.
+    /// For a vanilla bar oid (`ITEM_HULL`, `ITEM_ARMOR`, `ITEM_FUEL`, `ITEM_AMMO` or `ITEM_LEG`) the parts are added to that existing menu instead.
     pub bar: String,
     /// Parts offered by the menu, in order.
     ///
-    /// A bare string uses the part's native resource count for a vanilla bar
-    /// (so a 2x1 armor plate still costs two units) and one unit otherwise. The
-    /// object form accepts an explicit `cost`:
+    /// A bare string uses the part's native resource count for a vanilla bar and one unit for a custom resource.
+    /// The object form accepts an explicit `cost`:
     ///
     /// ```json
     /// "parts": ["MDL_QUARTERS_01", { "oid": "MDL_GENERATOR_01", "cost": 2 }]
@@ -229,21 +224,17 @@ pub struct PartMenuConfig {
     pub parts: Vec<PartMenuPart>,
     /// Which resource the menu spends.
     ///
-    /// Omitted means "auto": a vanilla bar uses its own resource, any other bar
-    /// gets a new custom resource. `"none"` disables resource gating (the parts
-    /// cost money only), `"custom"` forces a new custom resource, and `"hull"`,
-    /// `"armor"`, `"fuel"`, `"ammo"`, `"leg"` or the matching numeric id
-    /// (`10`, `20`, `30`, `40`, `50`) select a vanilla resource; the bar oid must
-    /// then be the matching `ITEM_*` bar.
+    /// Omitted means "auto": a vanilla bar uses its own resource and any other bar gets a new custom resource.
+    /// `"none"` disables resource gating (the parts cost money only).
+    /// `"custom"` forces a new custom resource.
+    /// `"hull"`, `"armor"`, `"fuel"`, `"ammo"`, `"leg"` or the matching numeric id (`10`, `20`, `30`, `40`, `50`) select a vanilla resource; the bar oid must then be the matching `ITEM_*` bar.
     #[serde(default)]
     pub resource: Option<PartMenuResource>,
     /// Spawn rules, one object or an array of objects.
     ///
-    /// The first rule whose `city_types` matches the current city is used; an
-    /// empty list matches every city type. For a new bar the rule's
-    /// `min_parts`/`max_parts` are the bar's starting stock, and `probability`
-    /// decides whether the bar appears at all. For a vanilla bar the stock comes
-    /// from the game, so only `probability` and `city_types` are used.
+    /// The first rule whose `city_types` matches the current city is used; an empty list matches every city type.
+    /// For a new bar `min_parts`/`max_parts` are its starting stock and `probability` decides whether it appears.
+    /// For a vanilla bar the stock is the game's, so only `probability` and `city_types` are used.
     #[serde(default, deserialize_with = "deserialize_part_menu_rules")]
     pub rules: Vec<PartMenuRule>,
 }
@@ -252,39 +243,106 @@ pub struct PartMenuConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PartMenuPart {
-    /// A part id; uses the part's native resource count for a vanilla bar, or
-    /// one unit for a custom resource.
+    /// A part id.
+    ///
+    /// A vanilla bar uses the part's native resource count; a custom resource uses one unit.
     Name(String),
     /// A part id with an explicit resource cost.
     Detailed {
         /// Part id (`m_oid` in `parts.seria`).
         oid: String,
-        /// Resource units one copy costs. Defaults to `1`.
+        /// Resource units one copy costs.
+        /// It must be at least 1.
         #[serde(default = "default_menu_cost")]
-        cost: u32,
+        cost: NonZeroU32,
     },
 }
 
 impl PartMenuPart {
     /// Returns the part id and its explicit resource cost, if one was given.
     #[must_use]
-    pub fn oid_and_cost(&self) -> (&str, Option<u32>) {
+    pub fn oid_and_cost(&self) -> (&str, Option<NonZeroU32>) {
         match self {
             Self::Name(oid) => (oid, None),
-            Self::Detailed { oid, cost } => (oid, Some((*cost).max(1))),
+            Self::Detailed { oid, cost } => (oid, Some(*cost)),
         }
     }
 }
 
 /// The resource a [`PartMenuConfig`] spends.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartMenuResource {
-    /// `"custom"`, `"none"` or a vanilla resource name (`"hull"`, `"armor"`, ...).
-    Name(String),
-    /// A resource id: `10` hull, `20` armor, `30` fuel, `40` ammo, `50` leg,
-    /// or an unused id between `61` and `98` for a custom resource.
-    Id(u32),
+    /// No resource gating; the parts cost money only.
+    None,
+    /// A new custom resource allocated at startup.
+    Custom,
+    /// A vanilla resource id: `10` hull, `20` armor, `30` fuel, `40` ammo, `50` leg.
+    Vanilla(u32),
+    /// A specific unused custom resource id.
+    CustomId(u32),
+}
+
+impl<'de> Deserialize<'de> for PartMenuResource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ResourceVisitor;
+
+        impl Visitor<'_> for ResourceVisitor {
+            type Value = PartMenuResource;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a part-menu resource name or id")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match value.to_ascii_lowercase().as_str() {
+                    "none" => Ok(PartMenuResource::None),
+                    "custom" => Ok(PartMenuResource::Custom),
+                    "hull" => Ok(PartMenuResource::Vanilla(10)),
+                    "armor" => Ok(PartMenuResource::Vanilla(20)),
+                    "fuel" => Ok(PartMenuResource::Vanilla(30)),
+                    "ammo" => Ok(PartMenuResource::Vanilla(40)),
+                    "leg" => Ok(PartMenuResource::Vanilla(50)),
+                    _ => Err(E::custom(format!("unknown part-menu resource \"{value}\""))),
+                }
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let id = u32::try_from(value)
+                    .map_err(|_| E::custom("part-menu resource id is too large"))?;
+                match id {
+                    10 | 20 | 30 | 40 | 50 => Ok(PartMenuResource::Vanilla(id)),
+                    61..=98 => Ok(PartMenuResource::CustomId(id)),
+                    _ => Err(E::custom(format!(
+                        "part-menu resource id {id} is not a vanilla id and is outside 61..=98"
+                    ))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(ResourceVisitor)
+    }
+}
+
+impl Serialize for PartMenuResource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::None => serializer.serialize_str("none"),
+            Self::Custom => serializer.serialize_str("custom"),
+            Self::Vanilla(id) | Self::CustomId(id) => serializer.serialize_u32(*id),
+        }
+    }
 }
 
 /// One spawn rule for a [`PartMenuConfig`].
@@ -292,13 +350,13 @@ pub enum PartMenuResource {
 pub struct PartMenuRule {
     /// Chance that the menu appears in a matching city.
     ///
-    /// `1.0` always appears, `0.25` is a 25% chance. Defaults to `1.0`.
+    /// `1.0` always appears and `0.25` is a 25% chance.
     #[serde(default = "default_menu_probability")]
     pub probability: f32,
-    /// Smallest stock the new bar can start with. Defaults to `1`.
+    /// Smallest stock the new bar can start with.
     #[serde(default = "default_menu_count")]
     pub min_parts: u32,
-    /// Largest stock the new bar can start with. Defaults to `1`.
+    /// Largest stock the new bar can start with.
     #[serde(default = "default_menu_count")]
     pub max_parts: u32,
     /// City type numbers where this rule applies; empty means every city type.
@@ -334,8 +392,8 @@ fn default_menu_count() -> u32 {
     1
 }
 
-fn default_menu_cost() -> u32 {
-    1
+fn default_menu_cost() -> NonZeroU32 {
+    NonZeroU32::new(1).expect("1 is nonzero")
 }
 
 impl Default for Config {
@@ -359,7 +417,6 @@ impl Default for Config {
             planes: plane_config,
             enable_shop_parts: false,
             shop_parts: HashMap::new(),
-            enable_part_menus: false,
             part_menus: Vec::new(),
             sell_multiplier: 1.0,
             refuel: RefuelConfig::default(),
@@ -446,8 +503,7 @@ mod tests {
     fn part_menus_accept_names_costs_and_single_or_multiple_rules() {
         let json = OLD_CONFIG.replacen(
             "\"planes\"",
-            r#""enable_part_menus": true,
-        "part_menus": [
+            r#""part_menus": [
             {
                 "bar": "ITEM_PAPERS",
                 "parts": ["MDL_QUARTERS_01", { "oid": "MDL_GENERATOR_01", "cost": 2 }],
@@ -468,7 +524,6 @@ mod tests {
         );
         let config: Config = serde_json::from_str(&json).unwrap();
 
-        assert!(config.enable_part_menus);
         assert_eq!(config.part_menus.len(), 2);
 
         let papers = &config.part_menus[0];
@@ -477,7 +532,7 @@ mod tests {
         assert_eq!(papers.parts[0].oid_and_cost(), ("MDL_QUARTERS_01", None));
         assert_eq!(
             papers.parts[1].oid_and_cost(),
-            ("MDL_GENERATOR_01", Some(2))
+            ("MDL_GENERATOR_01", NonZeroU32::new(2))
         );
         assert_eq!(papers.rules.len(), 1);
         assert_eq!(papers.rules[0].min_parts, 4);
@@ -503,14 +558,11 @@ mod tests {
         );
         let config: Config = serde_json::from_str(&json).unwrap();
 
-        assert!(matches!(
-            config.part_menus[0].resource,
-            Some(PartMenuResource::Name(ref name)) if name == "none"
-        ));
-        assert!(matches!(
+        assert_eq!(config.part_menus[0].resource, Some(PartMenuResource::None));
+        assert_eq!(
             config.part_menus[1].resource,
-            Some(PartMenuResource::Id(40))
-        ));
+            Some(PartMenuResource::Vanilla(40))
+        );
         assert!(config.part_menus[0].rules.is_empty());
     }
 }

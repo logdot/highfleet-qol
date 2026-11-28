@@ -185,7 +185,7 @@ unsafe extern "C" fn init() -> bool {
     #[cfg(feature = "1_151")]
     let part_menus: &[crate::config::PartMenuConfig] = &[];
 
-    if config.enable_shop_parts || config.enable_part_menus {
+    if config.enable_shop_parts || !part_menus.is_empty() {
         prepare_patch!(parts::patch_custom_parts(
             &mut patch_session,
             config.shop_parts,
@@ -194,7 +194,7 @@ unsafe extern "C" fn init() -> bool {
         if config.enable_shop_parts {
             log::info!("Custom parts enabled");
         }
-        if config.enable_part_menus {
+        if !part_menus.is_empty() {
             log::info!("Part menus enabled");
         }
     } else {
@@ -203,8 +203,8 @@ unsafe extern "C" fn init() -> bool {
     }
 
     #[cfg(not(feature = "1_151"))]
-    if config.enable_part_menus {
-        prepare_patch!(part_menus::prepare(&mut patch_session, &config.part_menus));
+    if !part_menus.is_empty() {
+        prepare_patch!(part_menus::prepare(&mut patch_session, part_menus));
     }
 
     prepare_patch!(sell_multiplier::patch_sell_multiplier(

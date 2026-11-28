@@ -1,36 +1,25 @@
 //! Custom part menus: shop bars that open a list of configured parts.
 //!
-//! Vanilla city shops only sell a handful of resource bars (`ITEM_HULL`,
-//! `ITEM_ARMOR`, ...), and every part without a resource is pushed into the shop
-//! as its own row. This module adds menus: a bar with its own stock, whose
-//! flyout is built from a private library node.
+//! Vanilla city shops sell a handful of resource bars and push every part without a resource into the shop as its own row.
+//! This module adds a bar with its own stock whose flyout is built from a private library node.
 //!
-//! The pieces:
+//! # Hooks
 //!
-//! * `inject_menus` is called from the shop-generation hook in [`crate::parts`]
-//!   and pushes one bar per matching rule into the city's shop node.
-//! * `hover` wraps the single `BottomMenu_` call in `mainMap`. For one of our bar
-//!   oids it renames the hovered body to `ITEM_HULL` and points the hull palette
-//!   global at our menu node for the duration of the call, so the game builds
-//!   its own flyout from our parts. The original return value is preserved.
-//! * `click` wraps the `ClickFunc` call. Vanilla bars are protected by the
-//!   game's own 14-name check; our bars are renamed to `ITEM_HULL` around that
-//!   call so clicking one never picks it up as a part.
-//! * Every gated menu part gets a private `Stats` copy whose resource list is
-//!   the menu's resource id repeated `cost` times. The shop flyout therefore
-//!   shows the real cost, and the game's own `_BuyPartShop` finds the bar by
-//!   resource id and deducts the stock. The shared part data is never edited;
-//!   the clone only points at the private record while a shop is showing it.
-//!
-//! The resource ids of new menus are written into the game's runtime resource
-//! table (base `0x143a13f10`, stride `0x40`), in the unused range `61..=98`.
+//! `inject_menus` runs from the shop-generation hook in [`crate::parts`] and pushes one bar per matching rule into the city shop node.
+//! `hover` wraps the `BottomMenu_` call and maps a custom bar oid to the menu node for one call.
+//! `click` wraps `ClickFunc` in the editor and stops the bar from being attached.
+//! Every gated part gets a private `Stats` copy whose resource list is the menu resource id repeated by the cost.
+//! The game's own `_BuyPartShop` then shows the real cost and deducts the bar's stock.
 
 use std::{
     collections::{HashMap, HashSet},
     ffi::{c_char, CString},
-    slice,
+    mem::{offset_of, size_of},
+    num::NonZeroU32,
 };
 
+use highfleet::general::{EscadraString, Node};
+use highfleet::v1_163::{Body, PartStats};
 use patchy::{CallBridge, FlagPolicy, KeepReturn, PatchSession, Result, StackAlignment};
 
 use crate::{
@@ -54,15 +43,11 @@ mod addresses {
     pub const BOTTOM_MENU: usize = 0x14020d820;
     /// `ClickFunc(context, gui, button, value)`.
     pub const CLICK_FUNC: usize = 0x14012f120;
-    /// `_BuyPartShop(part, count, target library)`.
-    pub const BUY_PART_SHOP: usize = 0x140221400;
 
     /// The `CALL BottomMenu_` in `mainMap`.
     pub const HOVER_CALL_SITE: usize = 0x14014074a;
     /// The `CALL ClickFunc` in `HandleClick`.
     pub const CLICK_CALL_SITE: usize = 0x14012d168;
-    /// The `CALL _BuyPartShop` inside `ObjectList_BuyPart`.
-    pub const BUY_CALL_SITE: usize = 0x14016301f;
 
     /// `EditorLibraryHull`; the palette global used for the rename trick.
     pub const HULL_SLOT: usize = 0x1403bd400;
@@ -84,10 +69,10 @@ mod addresses {
     pub const RESOURCE_TABLE: usize = 0x143a13f10;
     /// The global stats pointer vector (`StatListBase`).
     pub const STAT_LIST_BASE: usize = 0x143a33bf0;
-    pub const STAT_LIST_END: usize = 0x143a33bf8;
-    pub const STAT_LIST_CAPACITY: usize = 0x143a33c00;
     /// `initStats1`: default-constructs and deep-copies a `Stats` record.
     pub const INIT_STATS_COPY: usize = 0x1402815d0;
+    /// `GetStats(part_index)`.
+    pub const GET_STATS: usize = 0x140281e00;
     /// The game CRT `free`, matching `New`.
     pub const FREE: usize = 0x1403340d0;
 }
@@ -95,47 +80,75 @@ mod addresses {
 #[cfg(not(feature = "1_151"))]
 use addresses::*;
 
-/// `CURRENT_LOCATION + shop node`.
+/// `CURRENT_LOCATION + shop node` (the city object is not modeled in `highfleet-rs`).
 const SHOP_NODE_OFFSET: usize = 0x348;
+/// `CURRENT_LOCATION + city type`.
 const CITY_TYPE_OFFSET: usize = 0x25c;
 /// `PLAYER_ESCADRA + part inventory node`.
 const PLAYER_INVENTORY_OFFSET: usize = 0x520;
 
-/// `Body` fields.
-const BODY_OID: usize = 0x190;
-const BODY_OID_LENGTH: usize = 0x1a0;
-const BODY_OID_CAPACITY: usize = 0x1a8;
-const BODY_COUNT: usize = 0x7a8;
-const BODY_IS_LOOT: usize = 0x7ac;
-const BODY_IS_BLUEPRINT: usize = 0x7ad;
-const BODY_STATS_INDEX: usize = 0x188;
-
-/// `Stats` resource vector (`std::vector<u32>`).
-const STATS_RESOURCES_BEGIN: usize = 0x98;
-const STATS_RESOURCES_END: usize = 0xa0;
-const STATS_RESOURCES_CAPACITY: usize = 0xa8;
-/// Size of a `Stats` record.
+/// Full native `Stats` record size.
+///
+/// `highfleet-rs` models only the first `0x150` bytes as [`PartStats`]; `initStats1` allocates this
+/// larger native record.
 const STATS_SIZE: usize = 0x188;
-
-/// `Node` fields.
-const NODE_CHILDREN: usize = 0x100;
-const NODE_CHILD_PAYLOAD: usize = 0x10;
-const NODE_NAME: usize = 0xc8;
-const NODE_SIZE: usize = 0x128;
+/// `Stats.m_resources` (a three-pointer `std::vector<u32>`) starts here.
+///
+/// It sits inside [`PartStats::unknown_008ch`], which starts at `0x8c`; the compile-time assert
+/// below pins the two offsets together.
+const STATS_RESOURCES_OFFSET: usize = 0x98;
+/// Class code of a serialized `Body`.
+const CODE_BODY: u64 = 15;
 
 /// First and last unused ids in the game's resource table.
 const FIRST_CUSTOM_RESOURCE: u32 = 61;
 const LAST_CUSTOM_RESOURCE: u32 = 98;
 
-/// Maximum resource cost accepted for one part.
-const MAX_PART_COST: u32 = 64;
+/// Native `Stats.m_resources` header: a three-pointer `std::vector<u32>`.
+#[repr(C)]
+struct StatsResources {
+    begin: *mut u32,
+    end: *mut u32,
+    capacity: *mut u32,
+}
+
+const _: () = {
+    assert!(offset_of!(PartStats, unknown_008ch) == 0x8c);
+    assert!(offset_of!(PartStats, unknown_008ch) + 0x0c == STATS_RESOURCES_OFFSET);
+    assert!(size_of::<StatsResources>() == 0x18);
+};
+
+/// Native `StatList` vector header: base, initialized end, reserved end.
+#[repr(C)]
+struct StatsList {
+    base: *mut *mut PartStats,
+    end: *mut *mut PartStats,
+    capacity: *mut *mut PartStats,
+}
+
+const _: () = {
+    assert!(size_of::<StatsList>() == 0x18);
+};
+
+unsafe fn as_body(pointer: usize) -> &'static mut Body {
+    &mut *(pointer as *mut Body)
+}
+
+unsafe fn as_node(pointer: usize) -> &'static mut Node {
+    &mut *(pointer as *mut Node)
+}
+
+unsafe fn stats_resources(stats: *mut PartStats) -> &'static mut StatsResources {
+    &mut *((stats as *mut u8).add(STATS_RESOURCES_OFFSET) as *mut StatsResources)
+}
+
+unsafe fn stats_list() -> &'static mut StatsList {
+    &mut *(STAT_LIST_BASE as *mut StatsList)
+}
 
 /// A part clone in a no-gating menu still needs a large count because the money
 /// path decrements the clone.
-const UNLIMITED_COUNT: u32 = 999_999_999;
-
-/// Maximum number of bar bodies renamed around one click.
-const MAX_CLICK_RENAMES: usize = 16;
+const UNLIMITED_COUNT: i32 = i32::MAX;
 
 type NewFn = unsafe extern "C" fn(usize) -> usize;
 type NodeConstructorFn = unsafe extern "C" fn(usize) -> usize;
@@ -143,7 +156,6 @@ type CopyStringFn = unsafe extern "C" fn(usize, *const c_char, usize);
 type DefinePartFn = unsafe extern "C" fn(usize, *const c_char, usize, i32) -> usize;
 type HoverFn = unsafe extern "C" fn(usize, usize) -> u8;
 type ClickFn = unsafe extern "C" fn(usize, usize, u32, f32);
-type BuyFn = unsafe extern "C" fn(usize, i32, usize) -> usize;
 type InitStatsCopyFn = unsafe extern "C" fn(usize, usize) -> usize;
 type FreeFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 
@@ -155,11 +167,11 @@ enum Resource {
 }
 
 struct RuntimePart {
-    oid: Vec<u8>,
+    oid: String,
     cstr: CString,
     /// `None` means "use the part's native resource count" for a vanilla bar,
     /// or 1 for a custom resource.
-    cost: Option<u32>,
+    cost: Option<NonZeroU32>,
 }
 
 struct RuntimeRule {
@@ -170,7 +182,7 @@ struct RuntimeRule {
 }
 
 struct RuntimeMenu {
-    bar: Vec<u8>,
+    bar: String,
     bar_cstr: CString,
     parts: Vec<RuntimePart>,
     resource: Resource,
@@ -181,12 +193,6 @@ struct RuntimeMenu {
     node: usize,
     /// Part clones inside `node`.
     clones: Vec<usize>,
-}
-
-struct SavedOid {
-    text: usize,
-    bytes: [u8; 10],
-    length: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -200,8 +206,8 @@ static mut CLONE_STATS: Option<HashMap<usize, CloneStats>> = None;
 static mut CITY_MENUS: Option<HashMap<usize, Vec<bool>>> = None;
 
 fn menus() -> &'static mut Vec<RuntimeMenu> {
-    // SAFETY: every access happens on the game's main thread, from the same
-    // hooks that own the state. The vector is written once during init.
+    // SAFETY: every access happens on the game's main thread, from the same hooks that own the state.
+    // The vector is written once during init.
     unsafe { &mut *std::ptr::addr_of_mut!(MENUS) }
 }
 
@@ -241,7 +247,7 @@ pub(crate) unsafe fn prepare(session: &mut PatchSession, configs: &[PartMenuConf
     for menu in &runtime {
         log::info!(
             "Part menus: \"{}\": {} part(s), resource {}, {} rule(s)",
-            display(&menu.bar),
+            menu.bar,
             menu.parts.len(),
             match menu.resource {
                 Resource::Vanilla(id) => format!("vanilla id {id}"),
@@ -268,13 +274,6 @@ pub(crate) unsafe fn prepare(session: &mut PatchSession, configs: &[PartMenuConf
         click as *const (),
         KeepReturn::Neither,
         "part menu click guard",
-    );
-    install(
-        session,
-        BUY_CALL_SITE,
-        buy as *const (),
-        KeepReturn::Rax,
-        "part menu purchase",
     );
 
     Ok(())
@@ -305,9 +304,16 @@ unsafe fn install(
 
 fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
     let mut menus = Vec::new();
-    let mut used_ids = HashSet::new();
     let mut used_bars = HashSet::new();
     let mut next_custom = FIRST_CUSTOM_RESOURCE;
+    // Reserve explicit custom ids first so automatic allocation does not take them.
+    let mut used_ids: HashSet<u32> = configs
+        .iter()
+        .filter_map(|config| match config.resource {
+            Some(PartMenuResource::CustomId(id)) => Some(id),
+            _ => None,
+        })
+        .collect();
 
     for (index, config) in configs.iter().enumerate() {
         let bar_text = config.bar.trim();
@@ -325,7 +331,7 @@ fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
         if !used_bars.insert(bar.to_ascii_uppercase()) {
             log::error!(
                 "Part menus: \"{}\" is used by more than one menu, skipping the duplicate",
-                display(bar.as_bytes())
+                bar
             );
             continue;
         }
@@ -348,22 +354,22 @@ fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
                 }
             };
             parts.push(RuntimePart {
-                oid: oid.as_bytes().to_vec(),
+                oid: oid.to_string(),
                 cstr,
-                cost: cost.map(|value| value.clamp(1, MAX_PART_COST)),
+                cost,
             });
         }
 
         if parts.is_empty() {
             log::warn!(
                 "Part menus: \"{}\" has no usable parts, skipping the menu",
-                display(bar.as_bytes())
+                bar
             );
             continue;
         }
 
         let resource = match resolve_resource(
-            config.resource.as_ref(),
+            config.resource,
             vanilla,
             &mut next_custom,
             &mut used_ids,
@@ -371,22 +377,17 @@ fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
         ) {
             Ok(value) => value,
             Err(message) => {
-                log::error!(
-                    "Part menus: \"{}\": {message}, skipping the menu",
-                    display(bar.as_bytes())
-                );
+                log::error!("Part menus: \"{bar}\": {message}, skipping the menu");
                 continue;
             }
         };
 
         let mut rules = Vec::new();
         for rule in &config.rules {
-            let min = rule.min_parts.max(1);
-            let max = rule.max_parts.max(min);
             rules.push(RuntimeRule {
-                probability: rule.probability.clamp(0.0, 1.0),
-                min,
-                max,
+                probability: rule.probability,
+                min: rule.min_parts,
+                max: rule.max_parts,
                 city_types: rule.city_types.clone(),
             });
         }
@@ -402,16 +403,13 @@ fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
         let bar_cstr = match CString::new(bar.clone()) {
             Ok(value) => value,
             Err(_) => {
-                log::error!(
-                    "Part menus: \"{}\" contains a NUL byte, skipping the menu",
-                    display(bar.as_bytes())
-                );
+                log::error!("Part menus: \"{bar}\" contains a NUL byte, skipping the menu");
                 continue;
             }
         };
 
         menus.push(RuntimeMenu {
-            bar: bar.as_bytes().to_vec(),
+            bar,
             bar_cstr,
             parts,
             resource,
@@ -426,7 +424,7 @@ fn build_runtime(configs: &[PartMenuConfig]) -> Vec<RuntimeMenu> {
 }
 
 fn resolve_resource(
-    choice: Option<&PartMenuResource>,
+    choice: Option<PartMenuResource>,
     vanilla: Option<(u32, usize, &'static str)>,
     next_custom: &mut u32,
     used_ids: &mut HashSet<u32>,
@@ -437,46 +435,20 @@ fn resolve_resource(
             Some((id, _, _)) => Ok(Resource::Vanilla(id)),
             None => allocate_custom(next_custom, used_ids).map(Resource::Custom),
         },
-        Some(PartMenuResource::Name(name)) => {
-            let name = name.trim().to_ascii_lowercase();
-            match name.as_str() {
-                "none" => Ok(Resource::None),
-                "custom" => {
-                    if vanilla.is_some() {
-                        Err("a vanilla bar cannot use a custom resource".to_string())
-                    } else {
-                        allocate_custom(next_custom, used_ids).map(Resource::Custom)
-                    }
-                }
-                "hull" => vanilla_resource(vanilla, 10, bar),
-                "armor" => vanilla_resource(vanilla, 20, bar),
-                "fuel" => vanilla_resource(vanilla, 30, bar),
-                "ammo" => vanilla_resource(vanilla, 40, bar),
-                "leg" => vanilla_resource(vanilla, 50, bar),
-                other => Err(format!(
-                    "unknown resource \"{other}\" (use a vanilla id, \"custom\" or \"none\")"
-                )),
+        Some(PartMenuResource::None) => Ok(Resource::None),
+        Some(PartMenuResource::Custom) => {
+            if vanilla.is_some() {
+                Err("a vanilla bar cannot use a custom resource".to_string())
+            } else {
+                allocate_custom(next_custom, used_ids).map(Resource::Custom)
             }
         }
-        Some(PartMenuResource::Id(id)) => {
-            if let Some((vanilla_id, _, _)) = vanilla {
-                return if *id == vanilla_id {
-                    Ok(Resource::Vanilla(*id))
-                } else {
-                    Err(format!(
-                        "bar \"{bar}\" uses vanilla resource {vanilla_id}, not {id}"
-                    ))
-                };
+        Some(PartMenuResource::Vanilla(id)) => vanilla_resource(vanilla, id, bar),
+        Some(PartMenuResource::CustomId(id)) => {
+            if vanilla.is_some() {
+                return Err("a vanilla bar cannot use a custom resource".to_string());
             }
-            if !(FIRST_CUSTOM_RESOURCE..=LAST_CUSTOM_RESOURCE).contains(id) {
-                return Err(format!(
-                    "custom resource id {id} is outside {FIRST_CUSTOM_RESOURCE}..={LAST_CUSTOM_RESOURCE}"
-                ));
-            }
-            if !used_ids.insert(*id) {
-                return Err(format!("custom resource id {id} is already used"));
-            }
-            Ok(Resource::Custom(*id))
+            Ok(Resource::Custom(id))
         }
     }
 }
@@ -537,7 +509,7 @@ pub(crate) unsafe fn inject_menus(shop_node: usize, city: usize, city_type: Opti
     let menu_count = menus().len();
     let mut city_bits = vec![false; menu_count];
 
-    for index in 0..menu_count {
+    for (index, city_enabled) in city_bits.iter_mut().enumerate() {
         let (vanilla, bar, bar_cstr, resource) = {
             let menu = &menus()[index];
             (
@@ -557,7 +529,7 @@ pub(crate) unsafe fn inject_menus(shop_node: usize, city: usize, city_type: Opti
         };
 
         let enabled = rng::random_f32() < probability;
-        city_bits[index] = enabled;
+        *city_enabled = enabled;
         if !enabled || vanilla {
             continue;
         }
@@ -574,26 +546,23 @@ pub(crate) unsafe fn inject_menus(shop_node: usize, city: usize, city_type: Opti
         let clone = define_part(&bar_cstr, shop_node, count);
         if clone == 0 {
             log::error!(
-                "Part menus: could not create bar \"{}\" (unknown part id or missing stats in OL.seria)",
-                display(&bar)
+                "Part menus: could not create bar \"{bar}\" (unknown part id or missing stats in OL.seria)"
             );
             continue;
         }
-        set_i32(clone, BODY_COUNT, count);
-        set_u8(clone, BODY_IS_LOOT, 1);
-        set_u8(clone, BODY_IS_BLUEPRINT, 0);
+
+        let body = as_body(clone);
+        body.count = count;
+        body.is_loot = 1;
+        body.is_blueprint = 0;
+
         let price = bar_price(clone);
         if price > 0 {
             log::warn!(
-                "Part menus: bar \"{}\" has price {price}; every resource unit will also cost that much money (use a loot/item oid with price 0 to avoid this)",
-                display(&bar)
+                "Part menus: bar \"{bar}\" has price {price}; every resource unit will also cost that much money (use a loot/item oid with price 0 to avoid this)"
             );
         }
-        log::debug!(
-            "Part menus: \"{}\" spawned with {} stock",
-            display(&bar),
-            count
-        );
+        log::debug!("Part menus: \"{bar}\" spawned with {count} stock");
     }
 
     if city != 0 {
@@ -606,7 +575,7 @@ unsafe fn ensure_built(index: usize) -> bool {
         return true;
     }
 
-    let node = create_node(b"PART_MENU");
+    let node = create_node("PART_MENU");
     if node == 0 {
         log::error!("Part menus: could not allocate a library node");
         return false;
@@ -617,9 +586,8 @@ unsafe fn ensure_built(index: usize) -> bool {
         (menu.bar.clone(), menu.resource, menu.parts.len())
     };
 
-    // Vanilla resource bars are loot prototypes. Make the configured bar
-    // prototype loot too, so a bar bought into the inventory is a resource item
-    // rather than a placeable hull body (which floats when dropped on a ship).
+    // Vanilla resource bars are loot prototypes.
+    // Make the configured bar prototype loot too, so a bought bar is a resource item rather than a placeable hull body.
     mark_prototype_loot(&bar);
 
     if let Resource::Custom(id) = resource {
@@ -637,19 +605,16 @@ unsafe fn ensure_built(index: usize) -> bool {
             let part = &menu.parts[part_index];
             (part.cstr.clone(), part.oid.clone(), part.cost)
         };
-        let clone = define_part(&cstr, node, count as i32);
+        let clone = define_part(&cstr, node, count);
         if clone == 0 {
-            log::warn!(
-                "Part menus: \"{}\": part \"{}\" does not exist, skipping it",
-                display(&bar),
-                display(&oid)
-            );
+            log::warn!("Part menus: \"{bar}\": part \"{oid}\" does not exist, skipping it");
             continue;
         }
-        set_i32(clone, BODY_COUNT, count as i32);
-        set_u8(clone, BODY_IS_BLUEPRINT, 0);
-        let cost = configured_cost.unwrap_or(1).clamp(1, MAX_PART_COST);
-        menus()[index].parts[part_index].cost = Some(cost);
+        let clone_body = as_body(clone);
+        clone_body.count = count;
+        clone_body.is_blueprint = 0;
+        let cost = configured_cost.map(NonZeroU32::get).unwrap_or(1);
+        menus()[index].parts[part_index].cost = NonZeroU32::new(cost);
         let resource_id = match resource {
             Resource::None => None,
             Resource::Vanilla(id) | Resource::Custom(id) => Some(id),
@@ -661,8 +626,7 @@ unsafe fn ensure_built(index: usize) -> bool {
 
     menus()[index].node = node;
     log::info!(
-        "Part menus: built \"{}\" with {added}/{parts_len} part(s), resource {}",
-        display(&bar),
+        "Part menus: built \"{bar}\" with {added}/{parts_len} part(s), resource {}",
         match resource {
             Resource::Vanilla(id) => format!("vanilla id {id}"),
             Resource::Custom(id) => format!("custom id {id}"),
@@ -731,33 +695,27 @@ unsafe fn ensure_augmented(index: usize, editor: bool) {
             continue;
         }
 
-        let clone = define_part(&cstr, node, count as i32);
+        let clone = define_part(&cstr, node, count);
         if clone == 0 {
-            log::warn!(
-                "Part menus: \"{}\": part \"{}\" does not exist, skipping it",
-                display(&bar),
-                display(&oid)
-            );
+            log::warn!("Part menus: \"{bar}\": part \"{oid}\" does not exist, skipping it");
             continue;
         }
         let native_cost = resource_count(clone);
         let cost = configured_cost
+            .map(NonZeroU32::get)
             .unwrap_or(match resource {
                 Resource::Vanilla(_) => native_cost.max(1),
                 _ => 1,
-            })
-            .clamp(1, MAX_PART_COST);
+            });
         let resource_id = match resource {
             Resource::None => None,
             Resource::Vanilla(id) | Resource::Custom(id) => Some(id),
         };
-        menus()[index].parts[part_index].cost = Some(cost);
+        menus()[index].parts[part_index].cost = NonZeroU32::new(cost);
         register_clone(clone, resource_id, cost);
         apply_clone_state(clone, editor, no_gating);
         log::debug!(
-            "Part menus: added part to the \"{}\" menu (cost {} unit(s), resource {})",
-            display(&bar),
-            cost,
+            "Part menus: added part to the \"{bar}\" menu (cost {cost} unit(s), resource {})",
             match resource {
                 Resource::Vanilla(id) => format!("id {id}"),
                 Resource::Custom(id) => format!("id {id}"),
@@ -770,10 +728,11 @@ unsafe fn ensure_augmented(index: usize, editor: bool) {
 /// Creates or remembers the private stats record for one menu clone.
 ///
 /// Gated parts get a private `Stats` copy whose resource list is the menu's
-/// resource id repeated `cost` times. That is what makes the shop show a real
-/// resource cost and lets the game's own `_BuyPartShop` deduct the bar stock.
+/// resource id repeated `cost` times.
+/// That is what makes the shop show a real resource cost and lets the game's own
+/// `_BuyPartShop` deduct the bar stock.
 unsafe fn register_clone(clone: usize, resource_id: Option<u32>, cost: u32) {
-    let original = *((clone + BODY_STATS_INDEX) as *const i32);
+    let original = as_body(clone).part_index;
     let private = match resource_id {
         Some(id) => create_private_stats(original, id, cost),
         None => original,
@@ -783,24 +742,27 @@ unsafe fn register_clone(clone: usize, resource_id: Option<u32>, cost: u32) {
 
 unsafe fn create_private_stats(original: i32, resource_id: u32, cost: u32) -> i32 {
     let source = get_stats_by_index(original);
-    if source == 0 {
+    if source.is_null() {
         log::error!(
             "Part menus: cannot create private stats for part stats index {original} (not loaded); its purchase will fail"
         );
         return original;
     }
+
     let new: NewFn = std::mem::transmute(NEW);
     let memory = new(STATS_SIZE);
     if memory == 0 {
         log::error!("Part menus: out of memory creating private part stats");
         return original;
     }
+
     let init: InitStatsCopyFn = std::mem::transmute(INIT_STATS_COPY);
-    let stats = init(memory, source);
-    if stats == 0 {
+    let stats = init(memory, source as usize) as *mut PartStats;
+    if stats.is_null() {
         log::error!("Part menus: the stats copy constructor returned null");
         return original;
     }
+
     set_stats_resources(stats, resource_id, cost);
     match append_stat(stats) {
         Some(index) => {
@@ -816,31 +778,27 @@ unsafe fn create_private_stats(original: i32, resource_id: u32, cost: u32) -> i3
     }
 }
 
-unsafe fn set_stats_resources(stats: usize, resource_id: u32, cost: u32) {
-    let base = stats as *mut u8;
-    let begin_pointer = base.add(STATS_RESOURCES_BEGIN) as *mut usize;
-    let end_pointer = base.add(STATS_RESOURCES_END) as *mut usize;
-    let capacity_pointer = base.add(STATS_RESOURCES_CAPACITY) as *mut usize;
-
-    let begin = *begin_pointer as *mut u32;
-    let capacity = *capacity_pointer as usize;
+unsafe fn set_stats_resources(stats: *mut PartStats, resource_id: u32, cost: u32) {
+    let resources = stats_resources(stats);
+    let begin = resources.begin;
+    let capacity = resources.capacity;
     let count = cost as usize;
     let capacity_count = if begin.is_null() {
         0
     } else {
-        (capacity - begin as usize) / std::mem::size_of::<u32>()
+        (capacity as usize - begin as usize) / size_of::<u32>()
     };
 
     if !begin.is_null() && capacity_count >= count {
         for index in 0..count {
             *begin.add(index) = resource_id;
         }
-        *end_pointer = begin as usize + count * std::mem::size_of::<u32>();
+        resources.end = begin.add(count);
         return;
     }
 
     let new: NewFn = std::mem::transmute(NEW);
-    let buffer = new(count * std::mem::size_of::<u32>()) as *mut u32;
+    let buffer = new(count * size_of::<u32>()) as *mut u32;
     if buffer.is_null() {
         return;
     }
@@ -851,85 +809,61 @@ unsafe fn set_stats_resources(stats: usize, resource_id: u32, cost: u32) {
         let free: FreeFn = std::mem::transmute(FREE);
         free(begin as *mut std::ffi::c_void);
     }
-    *begin_pointer = buffer as usize;
-    *end_pointer = buffer as usize + count * std::mem::size_of::<u32>();
-    *capacity_pointer = *end_pointer;
+
+    resources.begin = buffer;
+    resources.end = buffer.add(count);
+    resources.capacity = resources.end;
 }
 
-/// Appends a stats record to the game's `StatListBase` vector and returns its
-/// index, or `None` when the vector could not be grown.
-unsafe fn append_stat(record: usize) -> Option<i32> {
-    let base_pointer = STAT_LIST_BASE as *mut usize;
-    let end_pointer = STAT_LIST_END as *mut usize;
-    let capacity_pointer = STAT_LIST_CAPACITY as *mut usize;
-
-    let base = *base_pointer;
-    let end = *end_pointer;
-    let capacity = *capacity_pointer;
-    if base == 0 {
+/// Appends a stats record to the game's `StatList` vector and returns its index,
+/// or `None` when the vector could not be grown.
+unsafe fn append_stat(record: *mut PartStats) -> Option<i32> {
+    let list = stats_list();
+    if list.base.is_null() {
         return None;
     }
-    let count = if end <= base {
-        0
-    } else {
-        (end - base) / std::mem::size_of::<usize>()
-    };
 
-    if end < capacity {
-        *(end as *mut usize) = record;
-        *end_pointer = end + std::mem::size_of::<usize>();
+    let count = list.end.offset_from(list.base) as usize;
+    if list.end < list.capacity {
+        *list.end = record;
+        list.end = list.end.add(1);
         return Some(count as i32);
     }
 
-    let capacity_count = if base == 0 || capacity <= base {
-        0
-    } else {
-        (capacity - base) / std::mem::size_of::<usize>()
-    };
-    let new_capacity = capacity_count.max(count).max(8) * 2;
+    let capacity_count = list.capacity.offset_from(list.base) as usize;
+    let new_capacity = (capacity_count * 2).max(count + 1);
     let new: NewFn = std::mem::transmute(NEW);
-    let new_base = new(new_capacity * std::mem::size_of::<usize>());
-    if new_base == 0 {
+    let new_base = new(new_capacity * size_of::<*mut PartStats>()) as *mut *mut PartStats;
+    if new_base.is_null() {
         return None;
     }
-    if base != 0 && count != 0 {
-        std::ptr::copy_nonoverlapping(
-            base as *const u8,
-            new_base as *mut u8,
-            count * std::mem::size_of::<usize>(),
-        );
+
+    if count != 0 {
+        std::ptr::copy_nonoverlapping(list.base, new_base, count);
     }
-    if base != 0 {
-        let free: FreeFn = std::mem::transmute(FREE);
-        free(base as *mut std::ffi::c_void);
-    }
-    *((new_base + count * std::mem::size_of::<usize>()) as *mut usize) = record;
-    *base_pointer = new_base;
-    *end_pointer = new_base + (count + 1) * std::mem::size_of::<usize>();
-    *capacity_pointer = new_base + new_capacity * std::mem::size_of::<usize>();
+    let free: FreeFn = std::mem::transmute(FREE);
+    free(list.base as *mut std::ffi::c_void);
+
+    *new_base.add(count) = record;
+    list.base = new_base;
+    list.end = new_base.add(count + 1);
+    list.capacity = new_base.add(new_capacity);
     Some(count as i32)
 }
 
-/// Sets a clone's per-mode state: free/unlimited in the editor (or a no-gating
-/// menu), and the private resource stats only while it is offered by a shop.
+/// Sets a clone's per-mode state: free and unlimited in the editor (or a
+/// no-gating menu), and the private resource stats only while a shop offers it.
 unsafe fn apply_clone_state(clone: usize, editor: bool, no_gating: bool) {
     let free_mode = editor || no_gating;
-    set_i32(
-        clone,
-        BODY_COUNT,
-        if free_mode { UNLIMITED_COUNT } else { 1 } as i32,
-    );
-    set_u8(clone, BODY_IS_BLUEPRINT, u8::from(!free_mode));
+    let body = as_body(clone);
+    body.count = if free_mode { UNLIMITED_COUNT } else { 1 };
+    body.is_blueprint = u8::from(!free_mode);
     if let Some(stats) = clone_stats().get(&clone).copied() {
-        set_i32(
-            clone,
-            BODY_STATS_INDEX,
-            if free_mode {
-                stats.original
-            } else {
-                stats.private
-            },
-        );
+        body.part_index = if free_mode {
+            stats.original
+        } else {
+            stats.private
+        };
     }
 }
 
@@ -971,7 +905,7 @@ unsafe extern "C" fn hover(hovered: usize, body: usize) -> u8 {
         *slot = node;
         let result = original(hovered, body);
         *slot = saved_node;
-        restore_oid(&saved, body);
+        restore_oid(body, &saved);
         return result;
     }
 
@@ -1005,23 +939,22 @@ unsafe fn player_inventory_node() -> usize {
     *((player + PLAYER_INVENTORY_OFFSET) as *const usize)
 }
 
-unsafe fn contains_child(node: usize, body: usize) -> bool {
-    if node == 0 || body == 0 {
+unsafe fn contains_child(node_pointer: usize, body: usize) -> bool {
+    if node_pointer == 0 || body == 0 {
         return false;
     }
-    let sentinel = *((node + NODE_CHILDREN) as *const usize);
-    if sentinel == 0 {
+
+    let sentinel = as_node(node_pointer).children.head;
+    if sentinel.is_null() {
         return false;
     }
-    let mut entry = *(sentinel as *const usize);
-    let mut steps = 0usize;
-    while entry != sentinel && steps < 8192 {
-        steps += 1;
-        let payload = *((entry + NODE_CHILD_PAYLOAD) as *const usize);
-        if payload == body {
+
+    let mut current = (*sentinel).next;
+    while current != sentinel {
+        if (*current).value as usize == body {
             return true;
         }
-        entry = *(entry as *const usize);
+        current = (*current).next;
     }
     false
 }
@@ -1029,20 +962,20 @@ unsafe fn contains_child(node: usize, body: usize) -> bool {
 /// `HandleClick`'s `CALL ClickFunc` replacement.
 unsafe extern "C" fn click(context: usize, gui: usize, button: u32, value: f32) {
     let original: ClickFn = std::mem::transmute(CLICK_FUNC);
-    // Only the editor attaches a palette button to the ship; the city shop's
-    // list buys its rows. Renaming in the shop would make a bought ITEM_PAPERS
-    // bar come back as HULL PARTS, so guard the editor's left click only.
+    // Only the editor attaches a palette button to the ship.
+    // The city shop's list buys its rows, so renaming there would make a bought bar change its oid.
     let editor = *(LOAD_CONSTRUCTOR_OR_EDITOR as *const u8) != 0;
     if button != 1 || !editor {
         original(context, gui, button, value);
         return;
     }
+
     let saved = begin_click_rename();
     original(context, gui, button, value);
     end_click_rename(&saved);
 }
 
-unsafe fn begin_click_rename() -> Vec<(usize, SavedOid)> {
+unsafe fn begin_click_rename() -> Vec<(usize, String)> {
     let mut saved = Vec::new();
     let editor = *(LOAD_CONSTRUCTOR_OR_EDITOR as *const u8) != 0;
     let node = if editor {
@@ -1059,154 +992,75 @@ unsafe fn begin_click_rename() -> Vec<(usize, SavedOid)> {
         return saved;
     }
 
-    let sentinel = *((node + NODE_CHILDREN) as *const usize);
-    if sentinel == 0 {
+    let sentinel = as_node(node).children.head;
+    if sentinel.is_null() {
         return saved;
     }
 
-    let mut entry = *(sentinel as *const usize);
-    let mut steps = 0usize;
-    while entry != sentinel && steps < 8192 {
-        steps += 1;
-        let payload = *((entry + NODE_CHILD_PAYLOAD) as *const usize);
-        if payload != 0 {
-            if let Some(oid) = body_oid(payload) {
+    let mut current = (*sentinel).next;
+    while current != sentinel {
+        let payload = (*current).value;
+        if !payload.is_null() {
+            if let Some(oid) = body_oid(payload as usize) {
                 if is_custom_bar(&oid) {
-                    if let Some(save) = rename_to_hull(payload) {
-                        saved.push((payload, save));
-                        if saved.len() >= MAX_CLICK_RENAMES {
-                            break;
-                        }
+                    if let Some(save) = rename_to_hull(payload as usize) {
+                        saved.push((payload as usize, save));
                     }
                 }
             }
         }
-        entry = *(entry as *const usize);
+        current = (*current).next;
     }
 
     saved
 }
 
-unsafe fn end_click_rename(saved: &[(usize, SavedOid)]) {
+unsafe fn end_click_rename(saved: &[(usize, String)]) {
     for (body, save) in saved {
-        restore_oid(save, *body);
+        restore_oid(*body, save);
     }
 }
 
-/// `ObjectList_BuyPart`'s `CALL _BuyPartShop` replacement.
-///
-/// The private stats already carry the menu resource, so the normal purchase
-/// works untouched. This wrapper only retries with the city shop node when the
-/// flyout's linked node is a palette library that does not contain the bar.
-unsafe extern "C" fn buy(part: usize, count: i32, target: usize) -> usize {
-    let original: BuyFn = std::mem::transmute(BUY_PART_SHOP);
-    let result = original(part, count, target);
-    if result != 0 {
-        return result;
-    }
+type GetStatsFn = unsafe extern "C" fn(i32) -> *mut PartStats;
 
-    let oid = body_oid(part).unwrap_or_default();
-    let Some(bar) = find_menu_bar(&oid) else {
-        return result;
-    };
-    if node_has_oid(target, &bar) {
-        return result;
-    }
-
-    let city = *(CURRENT_LOCATION as *const usize);
-    let shop = if city == 0 {
-        0
-    } else {
-        *((city + SHOP_NODE_OFFSET) as *const usize)
-    };
-    if shop == 0 || shop == target {
-        return result;
-    }
-    original(part, count, shop)
+unsafe fn get_stats_by_index(index: i32) -> *mut PartStats {
+    let get: GetStatsFn = std::mem::transmute(GET_STATS);
+    get(index)
 }
 
-fn find_menu_bar(oid: &[u8]) -> Option<Vec<u8>> {
-    menus()
-        .iter()
-        .find(|menu| menu.parts.iter().any(|part| part.oid == oid))
-        .map(|menu| menu.bar.clone())
-}
-
-unsafe fn node_has_oid(node: usize, oid: &[u8]) -> bool {
-    if node == 0 {
-        return false;
-    }
-    let sentinel = *((node + NODE_CHILDREN) as *const usize);
-    if sentinel == 0 {
-        return false;
-    }
-    let mut entry = *(sentinel as *const usize);
-    let mut steps = 0usize;
-    while entry != sentinel && steps < 8192 {
-        steps += 1;
-        let payload = *((entry + NODE_CHILD_PAYLOAD) as *const usize);
-        if payload != 0 {
-            if let Some(candidate) = body_oid(payload) {
-                if candidate == oid {
-                    return true;
-                }
-            }
-        }
-        entry = *(entry as *const usize);
-    }
-    false
-}
-
-unsafe fn get_stats_by_index(index: i32) -> usize {
-    if index < 0 {
-        return 0;
-    }
-    let base = *(STAT_LIST_BASE as *const usize);
-    let end = *(STAT_LIST_END as *const usize);
-    if base == 0 || end <= base {
-        return 0;
-    }
-    let count = (end - base) / std::mem::size_of::<usize>();
-    if index as usize >= count {
-        return 0;
-    }
-    *((base + index as usize * std::mem::size_of::<usize>()) as *const usize)
-}
-
-unsafe fn get_stats(part: usize) -> usize {
-    get_stats_by_index(*((part + BODY_STATS_INDEX) as *const i32))
+unsafe fn get_stats(part: usize) -> *mut PartStats {
+    get_stats_by_index(as_body(part).part_index)
 }
 
 /// Returns how many resource entries the part's shared stats currently have.
 unsafe fn resource_count(part: usize) -> u32 {
     let stats = get_stats(part);
-    if stats == 0 {
+    if stats.is_null() {
         return 0;
     }
-    let begin = *((stats + STATS_RESOURCES_BEGIN) as *const usize);
-    let end = *((stats + STATS_RESOURCES_END) as *const usize);
-    if end <= begin {
+    let resources = stats_resources(stats);
+    if resources.end <= resources.begin {
         return 0;
     }
-    ((end - begin) / std::mem::size_of::<u32>()) as u32
+    ((resources.end as usize - resources.begin as usize) / size_of::<u32>()) as u32
 }
 
 /// Returns the part's money price (`Stats.m_price`).
 unsafe fn bar_price(part: usize) -> i32 {
     let stats = get_stats(part);
-    if stats == 0 {
+    if stats.is_null() {
         return 0;
     }
-    *((stats + 0x88) as *const i32)
+    (*stats).price
 }
 
-fn find_menu(oid: &[u8], augmentation: bool) -> Option<usize> {
+fn find_menu(oid: &str, augmentation: bool) -> Option<usize> {
     menus()
         .iter()
         .position(|menu| menu.vanilla_slot.is_some() == augmentation && menu.bar == oid)
 }
 
-fn is_custom_bar(oid: &[u8]) -> bool {
+fn is_custom_bar(oid: &str) -> bool {
     find_menu(oid, false).is_some()
 }
 
@@ -1228,19 +1082,26 @@ unsafe fn current_city_type(city: usize) -> Option<u32> {
     }
 }
 
-unsafe fn create_node(name: &[u8]) -> usize {
+unsafe fn create_node(name: &str) -> usize {
     let new: NewFn = std::mem::transmute(NEW);
-    let raw = new(NODE_SIZE);
+    let raw = new(size_of::<Node>());
     if raw == 0 {
         return 0;
     }
+
     let constructor: NodeConstructorFn = std::mem::transmute(NODE_CONSTRUCTOR);
     let node = constructor(raw);
     if node == 0 {
         return 0;
     }
+
     let copy: CopyStringFn = std::mem::transmute(COPY_STRING);
-    copy(node + NODE_NAME, name.as_ptr() as *const c_char, name.len());
+    let name_field = &mut as_node(node).name;
+    copy(
+        name_field as *mut EscadraString as usize,
+        name.as_ptr() as *const c_char,
+        name.len(),
+    );
     node
 }
 
@@ -1249,178 +1110,121 @@ unsafe fn define_part(oid: &CString, node: usize, count: i32) -> usize {
     if all_parts == 0 || node == 0 {
         return 0;
     }
+
     let define: DefinePartFn = std::mem::transmute(DEFINE_PART);
-    define(all_parts, oid.as_ptr(), node, count)
+    define(all_parts, oid.as_ptr(), node, count) as usize
 }
 
-unsafe fn body_oid(body: usize) -> Option<Vec<u8>> {
-    if body == 0 {
+unsafe fn body_oid(part: usize) -> Option<String> {
+    if part == 0 {
         return None;
     }
-    let base = body as *const u8;
-    let capacity = (base.add(BODY_OID_CAPACITY) as *const u64).read();
-    let text = if capacity < 16 {
-        base.add(BODY_OID)
+
+    let body = as_body(part);
+    if body.base.base.base.code != CODE_BODY {
+        return None;
+    }
+
+    let oid = body.oid.get_string();
+    if oid.is_empty() {
+        None
     } else {
-        (base.add(BODY_OID) as *const *const u8).read()
-    };
-    if text.is_null() {
-        return None;
+        Some(oid.to_owned())
     }
-    let length = (base.add(BODY_OID_LENGTH) as *const u64).read() as usize;
-    if length == 0 || length > 256 {
-        return None;
-    }
-    Some(slice::from_raw_parts(text, length).to_vec())
 }
 
-unsafe fn rename_to_hull(body: usize) -> Option<SavedOid> {
-    let base = body as *const u8;
-    let capacity = (base.add(BODY_OID_CAPACITY) as *const u64).read();
-    if capacity < 10 {
-        log::warn!("Part menus: a config bar id is too short to be renamed, click guard skipped");
+unsafe fn rename_to_hull(part: usize) -> Option<String> {
+    if part == 0 {
         return None;
     }
-    let text = if capacity < 16 {
-        body + BODY_OID
+
+    let body = as_body(part);
+    if body.base.base.base.code != CODE_BODY {
+        return None;
+    }
+
+    let saved = body.oid.get_string().to_owned();
+    body.oid.set_string(&"ITEM_HULL".to_owned());
+    Some(saved)
+}
+
+unsafe fn restore_oid(part: usize, saved: &str) {
+    as_body(part).oid.set_string(&saved.to_owned());
+}
+
+unsafe fn record_name(record: usize) -> Option<String> {
+    let name = &*(record as *const EscadraString);
+    let text = name.get_string();
+    if text.is_empty() {
+        None
     } else {
-        (base.add(BODY_OID) as *const *const u8).read() as usize
-    };
-    if text == 0 {
-        return None;
+        Some(text.to_owned())
     }
-
-    let mut bytes = [0u8; 10];
-    std::ptr::copy_nonoverlapping(text as *const u8, bytes.as_mut_ptr(), 10);
-    let length = (base.add(BODY_OID_LENGTH) as *const u64).read();
-
-    std::ptr::copy_nonoverlapping(b"ITEM_HULL\0".as_ptr(), text as *mut u8, 10);
-    (base.add(BODY_OID_LENGTH) as *mut u64).write(9);
-
-    Some(SavedOid {
-        text,
-        bytes,
-        length,
-    })
 }
 
-unsafe fn restore_oid(saved: &SavedOid, body: usize) {
-    std::ptr::copy_nonoverlapping(saved.bytes.as_ptr(), saved.text as *mut u8, 10);
-    ((body as *const u8).add(BODY_OID_LENGTH) as *mut u64).write(saved.length);
-}
-
-/// Returns the length of an `EscadraName` record (the resource table layout).
-unsafe fn record_name(record: usize) -> Option<Vec<u8>> {
-    if record == 0 {
-        return None;
-    }
-    let length = *((record + 0x10) as *const u64) as usize;
-    if length > 256 {
-        return None;
-    }
-    let capacity = *((record + 0x18) as *const u64);
-    let text = if capacity < 16 {
-        record
-    } else {
-        *(record as *const usize)
-    };
-    if text == 0 || length == 0 {
-        return None;
-    }
-    Some(slice::from_raw_parts(text as *const u8, length).to_vec())
-}
-
-unsafe fn write_resource_name(id: u32, name: &[u8]) -> bool {
+unsafe fn write_resource_name(id: u32, name: &str) -> bool {
     let record = RESOURCE_TABLE + id as usize * 0x40;
     if let Some(existing) = record_name(record) {
         if existing == name {
             return true;
         }
+
         log::error!(
-            "Part menus: resource id {id} is already named \"{}\", cannot use \"{}\"",
-            display(&existing),
-            display(name)
+            "Part menus: resource id {id} is already named \"{existing}\", cannot use \"{name}\""
         );
         return false;
     }
 
-    if name.len() <= 15 {
-        let text = record as *mut u8;
-        std::ptr::copy_nonoverlapping(name.as_ptr(), text, name.len());
-        text.add(name.len()).write(0);
-        ((record + 0x10) as *mut u64).write(name.len() as u64);
-        ((record + 0x18) as *mut u64).write(15);
-    } else {
-        let new: NewFn = std::mem::transmute(NEW);
-        let buffer = new(name.len() + 1);
-        if buffer == 0 {
-            return false;
-        }
-        std::ptr::copy_nonoverlapping(name.as_ptr(), buffer as *mut u8, name.len());
-        (buffer as *mut u8).add(name.len()).write(0);
-        (record as *mut usize).write(buffer);
-        ((record + 0x10) as *mut u64).write(name.len() as u64);
-        ((record + 0x18) as *mut u64).write(name.len() as u64);
-    }
+    let copy: CopyStringFn = std::mem::transmute(COPY_STRING);
+    copy(record, name.as_ptr() as *const c_char, name.len());
     true
 }
 
-unsafe fn find_child(node: usize, oid: &[u8]) -> Option<usize> {
-    let sentinel = *((node + NODE_CHILDREN) as *const usize);
-    if sentinel == 0 {
+/// Finds the direct child body with `oid` under `node`.
+unsafe fn find_child(node_pointer: usize, oid: &str) -> Option<usize> {
+    if node_pointer == 0 {
         return None;
     }
-    let mut entry = *(sentinel as *const usize);
-    let mut steps = 0usize;
-    while entry != sentinel && steps < 8192 {
-        steps += 1;
-        let payload = *((entry + NODE_CHILD_PAYLOAD) as *const usize);
-        if payload != 0 {
-            if let Some(candidate) = body_oid(payload) {
-                if candidate == oid {
-                    return Some(payload);
-                }
+
+    let node = as_node(node_pointer);
+    let sentinel = node.children.head;
+    if sentinel.is_null() {
+        return None;
+    }
+
+    let mut current = (*sentinel).next;
+    while current != sentinel {
+        let child = (*current).value;
+        if !child.is_null() {
+            let body = child as *mut Body;
+            if (*body).base.base.base.code == CODE_BODY && (*body).oid.get_string() == oid {
+                return Some(child as usize);
             }
         }
-        entry = *(entry as *const usize);
+        current = (*current).next;
     }
     None
 }
 
 /// Marks the bar's prototype in `ALL_PARTS` as loot.
 ///
-/// Vanilla resource bars (`ITEM_HULL`, ...) have `is_loot=true` in
-/// `parts.seria`. A custom bar oid usually does not, and the game then treats a
-/// bought bar as a placeable body, which floats when dragged out of the
-/// inventory. The bar clone gets the flag too, but the placement path looks the
-/// prototype up by oid.
-unsafe fn mark_prototype_loot(oid: &[u8]) {
+/// Vanilla resource bars (`ITEM_HULL`, ...) have `is_loot=true` in `parts.seria`.
+/// A custom bar oid usually does not, and the game then treats a bought bar as a placeable body, which floats when dragged out of the inventory.
+/// The bar clone gets the flag too, but the placement path looks the prototype up by oid.
+unsafe fn mark_prototype_loot(oid: &str) {
     let all_parts = *(ALL_PARTS as *const usize);
     if all_parts == 0 {
         return;
     }
+
     match find_child(all_parts, oid) {
         Some(prototype) => {
-            if *((prototype + BODY_IS_LOOT) as *const u8) == 0 {
-                set_u8(prototype, BODY_IS_LOOT, 1);
-                log::debug!("Part menus: marked prototype \"{}\" as loot", display(oid));
+            let body = as_body(prototype);
+            if body.is_loot == 0 {
+                body.is_loot = 1;
+                log::debug!("Part menus: marked prototype \"{oid}\" as loot");
             }
         }
-        None => log::warn!(
-            "Part menus: bar prototype \"{}\" was not found in ALL_PARTS",
-            display(oid)
-        ),
+        None => log::warn!("Part menus: bar prototype \"{oid}\" was not found in ALL_PARTS"),
     }
-}
-
-unsafe fn set_u8(body: usize, offset: usize, value: u8) {
-    ((body + offset) as *mut u8).write(value);
-}
-
-unsafe fn set_i32(body: usize, offset: usize, value: i32) {
-    ((body + offset) as *mut i32).write(value);
-}
-
-fn display(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
 }
